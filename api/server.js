@@ -289,9 +289,11 @@ app.post('/api/plaid/sync', requireBearerAuth, async (req, res) => {
       return res.status(404).json({ error: 'No linked accounts found.' });
     }
 
-    // Default to current calendar month
+    // Default to last 30 days
     const now = new Date();
-    const startDate = req.body.startDate || new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    const thirtyDaysAgo = new Date(now);
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const startDate = req.body.startDate || thirtyDaysAgo.toISOString().slice(0, 10);
     const endDate = req.body.endDate || now.toISOString().slice(0, 10);
 
     let allRaw = [];

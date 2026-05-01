@@ -13,7 +13,7 @@ struct BudgetSnapApp: App {
         repository: InMemoryBudgetRepository(),
         apiClient: URLSessionImportAPIClient(
             baseURL: URL(string: "http://localhost:3000")!,
-            authTokenProvider: { "" }
+            authTokenProvider: { LocalConfig.apiSecret }
         )
     )
 

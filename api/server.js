@@ -11,6 +11,10 @@ if (!process.env.OPENAI_API_KEY) {
   console.warn('OPENAI_API_KEY is missing. Add it to api/.env before processing imports.');
 }
 
+if (!process.env.API_SECRET) {
+  console.warn('API_SECRET is missing. The import endpoint will reject all requests until it is set.');
+}
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
@@ -30,6 +34,21 @@ const allowedCategoryIDs = [
   'cat_misc'
 ];
 
+const MAX_TEXTS_PER_REQUEST = 10;
+
+function requireBearerAuth(req, res, next) {
+  const secret = process.env.API_SECRET;
+  if (!secret) {
+    return res.status(503).json({ error: 'Server is not configured for authenticated requests.' });
+  }
+  const auth = req.headers['authorization'] || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  if (token !== secret) {
+    return res.status(401).json({ error: 'Unauthorized.' });
+  }
+  next();
+}
+
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 
@@ -37,50 +56,38 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'BudgetSnap API' });
 });
 
-app.post('/api/imports/screenshots/process', async (req, res) => {
+app.post('/api/imports/screenshots/process', requireBearerAuth, async (req, res) => {
   try {
-    const images = req.body?.images || [];
+    const texts = req.body?.texts || [];
 
-    if (!Array.isArray(images) || images.length === 0) {
-      return res.status(400).json({ error: 'No screenshots uploaded.' });
+    if (!Array.isArray(texts) || texts.length === 0) {
+      return res.status(400).json({ error: 'No screenshot text provided.' });
     }
 
-    const imageInputs = images.map((base64) => ({
-      type: 'input_image',
-      image_url: `data:image/jpeg;base64,${base64}`
-    }));
+    if (texts.length > MAX_TEXTS_PER_REQUEST) {
+      return res.status(400).json({ error: `Too many screenshots. Maximum is ${MAX_TEXTS_PER_REQUEST} per request.` });
+    }
 
-    const response = await openai.responses.create({
-      model: 'gpt-5-nano',
-      input: [
+    const combinedText = texts
+      .map((t, i) => `--- Screenshot ${i + 1} ---\n${t}`)
+      .join('\n\n');
+
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      response_format: { type: 'json_object' },
+      messages: [
         {
           role: 'system',
-          content: [
-            {
-              type: 'input_text',
-              text: systemPrompt()
-            }
-          ]
+          content: systemPrompt()
         },
         {
           role: 'user',
-          content: [
-            {
-              type: 'input_text',
-              text: 'Extract visible financial transactions from these screenshots.'
-            },
-            ...imageInputs
-          ]
+          content: `Extract financial transactions from the following OCR text from ${texts.length} screenshot(s):\n\n${combinedText}`
         }
-      ],
-      text: {
-        format: {
-          type: 'json_object'
-        }
-      }
+      ]
     });
 
-    const parsed = JSON.parse(response.output_text);
+    const parsed = JSON.parse(response.choices[0].message.content);
     const transactions = normalizeTransactions(parsed.transactions || []);
 
     res.json({

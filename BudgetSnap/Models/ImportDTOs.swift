@@ -21,7 +21,7 @@ struct ParsedTransactionDTO: Codable, Hashable {
 }
 
 struct ImportWarning: Codable, Hashable, Identifiable {
-    var id = UUID().uuidString
+    let id = UUID().uuidString
     var type: String
     var message: String
 

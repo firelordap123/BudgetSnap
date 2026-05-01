@@ -11,9 +11,9 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		383CE8F52FA40C2B00363EE1 /* BudgAI */ = {
+		383CE8F52FA40C2B00363EE1 /* BudgetSnap */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = BudgAI;
+			path = BudgetSnap;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		383CE8EA2FA40C2B00363EE1 = {
 			isa = PBXGroup;
 			children = (
-				383CE8F52FA40C2B00363EE1 /* BudgAI */,
+				383CE8F52FA40C2B00363EE1 /* BudgetSnap */,
 				383CE8F42FA40C2B00363EE1 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -61,7 +61,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				383CE8F52FA40C2B00363EE1 /* BudgAI */,
+				383CE8F52FA40C2B00363EE1 /* BudgetSnap */,
 			);
 			name = BudgetSnap;
 			packageProductDependencies = (
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 383CE8EE2FA40C2B00363EE1 /* Build configuration list for PBXProject "BudgAI" */;
+			buildConfigurationList = 383CE8EE2FA40C2B00363EE1 /* Build configuration list for PBXProject "BudgetSnap" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -315,7 +315,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		383CE8EE2FA40C2B00363EE1 /* Build configuration list for PBXProject "BudgAI" */ = {
+		383CE8EE2FA40C2B00363EE1 /* Build configuration list for PBXProject "BudgetSnap" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				383CE8FE2FA40C2B00363EE1 /* Debug */,

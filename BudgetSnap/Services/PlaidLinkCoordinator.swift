@@ -1,40 +1,50 @@
 import LinkKit
-import SwiftUI
+import UIKit
 
-struct PlaidLinkView: UIViewControllerRepresentable {
-    let linkToken: String
-    let onSuccess: (String, String, String) -> Void  // (publicToken, institutionName, institutionId)
-    let onExit: () -> Void
+// Retained for the duration of the Link session
+private var activeLinkHandler: Handler?
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        let vc = UIViewController()
-        vc.view.backgroundColor = .systemBackground
-        return vc
+func openPlaidLink(
+    token: String,
+    onSuccess: @escaping (String, String, String) -> Void,
+    onExit: @escaping () -> Void
+) {
+    var config = LinkTokenConfiguration(token: token) { (success: LinkSuccess) in
+        activeLinkHandler = nil
+        let institution = success.metadata.institution
+        onSuccess(success.publicToken, institution.name, institution.id)
+    }
+    config.onExit = { (_: LinkExit) in
+        activeLinkHandler = nil
+        onExit()
     }
 
-    // Called after the VC is in the window hierarchy — safe to present from here
-    func updateUIViewController(_ vc: UIViewController, context: Context) {
-        guard context.coordinator.handler == nil else { return }
-
-        var config = LinkTokenConfiguration(token: linkToken) { (success: LinkSuccess) in
-            let institution = success.metadata.institution
-            onSuccess(success.publicToken, institution.name, institution.id)
-        }
-        config.onExit = { (_: LinkExit) in onExit() }
-
-        switch Plaid.create(config) {
-        case .success(let handler):
-            context.coordinator.handler = handler
-            let mode: PresentationMethod = .viewController(vc)
-            handler.open(presentUsing: mode)
-        case .failure:
-            onExit()
-        }
+    guard case .success(let handler) = Plaid.create(config) else {
+        onExit()
+        return
     }
 
-    final class Coordinator {
-        var handler: Handler?
+    activeLinkHandler = handler
+
+    guard let topVC = UIApplication.shared.topPresentedViewController() else {
+        onExit()
+        return
+    }
+
+    let mode: PresentationMethod = .viewController(topVC)
+    handler.open(presentUsing: mode)
+}
+
+private extension UIApplication {
+    func topPresentedViewController() -> UIViewController? {
+        let keyWindow = connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        var top = keyWindow?.rootViewController
+        while let presented = top?.presentedViewController {
+            top = presented
+        }
+        return top
     }
 }

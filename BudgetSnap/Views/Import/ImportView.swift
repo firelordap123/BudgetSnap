@@ -3,8 +3,6 @@ import SwiftUI
 struct ImportView: View {
     @EnvironmentObject private var store: AppStore
     @State private var showReview = false
-    @State private var showPlaidLink = false
-    @State private var linkToken: String?
     @State private var isLoadingToken = false
 
     var body: some View {
@@ -33,24 +31,6 @@ struct ImportView: View {
             .navigationTitle("Import")
             .navigationDestination(isPresented: $showReview) {
                 ReviewImportView()
-            }
-            .fullScreenCover(isPresented: $showPlaidLink) {
-                if let token = linkToken {
-                    PlaidLinkView(
-                        linkToken: token,
-                        onSuccess: { publicToken, institutionName, institutionId in
-                            showPlaidLink = false
-                            Task {
-                                await store.exchangePlaidToken(
-                                    publicToken: publicToken,
-                                    institutionName: institutionName,
-                                    institutionId: institutionId
-                                )
-                            }
-                        },
-                        onExit: { showPlaidLink = false }
-                    )
-                }
             }
             .task { await store.loadLinkedAccounts() }
         }
@@ -133,8 +113,20 @@ struct ImportView: View {
                 isLoadingToken = true
                 store.syncErrorMessage = nil
                 do {
-                    linkToken = try await store.createLinkToken()
-                    showPlaidLink = true
+                    let token = try await store.createLinkToken()
+                    openPlaidLink(
+                        token: token,
+                        onSuccess: { publicToken, institutionName, institutionId in
+                            Task { @MainActor in
+                                await store.exchangePlaidToken(
+                                    publicToken: publicToken,
+                                    institutionName: institutionName,
+                                    institutionId: institutionId
+                                )
+                            }
+                        },
+                        onExit: {}
+                    )
                 } catch {
                     store.syncErrorMessage = error.localizedDescription
                 }

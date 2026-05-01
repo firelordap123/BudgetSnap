@@ -46,7 +46,23 @@ struct URLSessionImportAPIClient: ImportAPIClient {
         }
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+
+            if let date = Formatters.apiDateOnly.date(from: value) {
+                return date
+            }
+
+            if let date = Formatters.apiISO8601.date(from: value) {
+                return date
+            }
+
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid date string: \(value)"
+            )
+        }
         return try decoder.decode(ParsedImportResponse.self, from: data)
     }
 }

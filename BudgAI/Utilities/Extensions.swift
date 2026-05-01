@@ -46,6 +46,17 @@ enum Formatters {
         return formatter
     }()
 
+    static let apiDateOnly: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .iso8601)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    static let apiISO8601 = ISO8601DateFormatter()
+
     static func currencyString(_ amount: Decimal, currencyCode: String = "USD") -> String {
         currency.currencyCode = currencyCode
         return currency.string(from: NSDecimalNumber(decimal: amount)) ?? "$0.00"

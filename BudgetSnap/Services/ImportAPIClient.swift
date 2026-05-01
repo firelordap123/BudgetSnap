@@ -41,8 +41,12 @@ struct URLSessionImportAPIClient: ImportAPIClient {
         request.httpBody = try JSONEncoder().encode(["texts": texts])
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse else {
             throw ImportAPIError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let body = (try? JSONDecoder().decode([String: String].self, from: data))?["error"] ?? "Status \(http.statusCode)"
+            throw ImportAPIError.serverMessage(body)
         }
 
         let decoder = JSONDecoder()

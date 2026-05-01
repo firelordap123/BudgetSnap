@@ -10,7 +10,7 @@ import SwiftUI
 @main
 struct BudgetSnapApp: App {
     @StateObject private var store = AppStore(
-        repository: InMemoryBudgetRepository(),
+        repository: JSONFileBudgetRepository(),
         plaidClient: URLSessionPlaidAPIClient(
             baseURL: URL(string: LocalConfig.baseURL)!,
             authTokenProvider: { LocalConfig.apiSecret }

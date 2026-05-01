@@ -3,6 +3,7 @@ import SwiftUI
 struct TransactionEditorView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var amountFocused: Bool
 
     @State private var transaction: BudgetTransaction
     @State private var amountText: String
@@ -10,7 +11,7 @@ struct TransactionEditorView: View {
 
     init(transaction: BudgetTransaction) {
         _transaction = State(initialValue: transaction)
-        _amountText = State(initialValue: NSDecimalNumber(decimal: transaction.amount).stringValue)
+        _amountText = State(initialValue: String(format: "%.2f", NSDecimalNumber(decimal: transaction.amount).doubleValue))
     }
 
     var body: some View {
@@ -19,8 +20,17 @@ struct TransactionEditorView: View {
                 Section("Transaction") {
                     TextField("Merchant", text: $transaction.normalizedMerchantName)
                     DatePicker("Date", selection: $transaction.transactionDate, displayedComponents: .date)
-                    TextField("Amount", text: $amountText)
-                        .keyboardType(.decimalPad)
+                    HStack {
+                        Text("$")
+                            .foregroundStyle(.secondary)
+                        TextField("0.00", text: $amountText)
+                            .keyboardType(.decimalPad)
+                            .focused($amountFocused)
+                            .multilineTextAlignment(.trailing)
+                            .onChange(of: amountFocused) { _, focused in
+                                if focused { amountText = "" }
+                            }
+                    }
                 }
 
                 Section("Category") {

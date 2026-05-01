@@ -20,7 +20,7 @@ struct RootTabView: View {
                 .tabItem { Label("Dashboard", systemImage: "chart.pie.fill") }
 
             ImportView()
-                .tabItem { Label("Import", systemImage: "camera.viewfinder") }
+                .tabItem { Label("Import", systemImage: "building.columns") }
 
             TransactionsView()
                 .tabItem { Label("Transactions", systemImage: "list.bullet.rectangle.fill") }

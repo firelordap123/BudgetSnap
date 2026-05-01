@@ -391,14 +391,19 @@ app.get('/health', (_req, res) => {
 // ─── Auth: Password (web) ────────────────────────────────────────────────────
 
 app.post('/api/auth/password', (req, res) => {
-  if (!process.env.WEB_PASSWORD) {
-    return res.status(503).json({ error: 'Web login is not configured on this server.' });
+  try {
+    if (!process.env.WEB_PASSWORD) {
+      return res.status(503).json({ error: 'Web login is not configured on this server.' });
+    }
+    const { password } = req.body;
+    if (!password || password !== process.env.WEB_PASSWORD) {
+      return res.status(401).json({ error: 'Incorrect password.' });
+    }
+    res.json({ sessionToken: signSessionToken({ id: 'web:owner' }) });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
   }
-  const { password } = req.body;
-  if (!password || password !== process.env.WEB_PASSWORD) {
-    return res.status(401).json({ error: 'Incorrect password.' });
-  }
-  res.json({ sessionToken: signSessionToken({ id: 'web:owner' }) });
 });
 
 // ─── Auth: Sign in with Apple ─────────────────────────────────────────────────

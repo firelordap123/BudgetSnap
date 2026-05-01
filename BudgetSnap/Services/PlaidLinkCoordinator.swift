@@ -21,7 +21,7 @@ struct PlaidLinkView: UIViewControllerRepresentable {
         switch Plaid.create(config) {
         case .success(let handler):
             context.coordinator.handler = handler
-            let mode: OpenMode = .viewController(vc)
+            let mode: PresentationMethod = .viewController(vc)
             handler.open(presentUsing: mode)
         case .failure:
             onExit()

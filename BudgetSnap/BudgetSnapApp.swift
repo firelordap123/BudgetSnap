@@ -12,7 +12,7 @@ struct BudgetSnapApp: App {
     @StateObject private var store = AppStore(
         repository: InMemoryBudgetRepository(),
         apiClient: URLSessionImportAPIClient(
-            baseURL: URL(string: "http://localhost:3000")!,
+            baseURL: URL(string: "https://budgetsnap-production.up.railway.app")!,
             authTokenProvider: { LocalConfig.apiSecret }
         )
     )

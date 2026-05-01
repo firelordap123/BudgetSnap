@@ -2,16 +2,11 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var deleteScreenshots = true
     @State private var newCategoryName = ""
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Privacy") {
-                    Toggle("Delete screenshots after import", isOn: $deleteScreenshots)
-                }
-
                 Section("Categories") {
                     HStack {
                         TextField("New category", text: $newCategoryName)

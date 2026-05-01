@@ -95,7 +95,6 @@ struct BudgetTransaction: Identifiable, Codable, Hashable {
     var currency: String
     var categoryID: String
     var status: TransactionStatus
-    var sourceImageID: String?
     var categorySource: CategorySource
     var confidence: Double
     var rawText: String
@@ -144,23 +143,6 @@ struct CategorizationRule: Identifiable, Codable, Hashable {
             return merchant.hasPrefix(value) || normalized.hasPrefix(value)
         }
     }
-}
-
-struct ImportBatch: Identifiable, Codable, Hashable {
-    var id: String
-    var imageIDs: [String]
-    var status: ImportStatus
-    var createdAt: Date
-}
-
-enum ImportStatus: String, Codable, CaseIterable, Identifiable {
-    case selected
-    case uploading
-    case processing
-    case processed
-    case failed
-
-    var id: String { rawValue }
 }
 
 struct DashboardSummary: Hashable {

@@ -2,7 +2,7 @@ import Foundation
 
 struct ParsedImportResponse: Codable {
     var importBatchID: String
-    var status: ImportStatus
+    var status: String
     var transactions: [ParsedTransactionDTO]
     var warnings: [ImportWarning]
 }

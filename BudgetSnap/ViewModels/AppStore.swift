@@ -4,17 +4,15 @@ import Combine
 @MainActor
 final class AppStore: ObservableObject {
     private var repository: any BudgetRepository
-    private let apiClient: any ImportAPIClient
     private let ruleEngine = CategorizationRuleEngine()
 
-    @Published var isImporting = false
-    @Published var importErrorMessage: String?
+    @Published var isSyncing = false
+    @Published var syncErrorMessage: String?
     @Published var selectedPendingTransactionIDs = Set<String>()
     @Published var didCompleteSetup = false
 
-    init(repository: any BudgetRepository, apiClient: any ImportAPIClient) {
+    init(repository: any BudgetRepository) {
         self.repository = repository
-        self.apiClient = apiClient
     }
 
     var allCategories: [SpendingCategory] { repository.categories }
@@ -66,41 +64,29 @@ final class AppStore: ObservableObject {
         categories.first { $0.id == id }
     }
 
-    func importScreenshots(_ images: [Data]) async {
-        isImporting = true
-        importErrorMessage = nil
-
-        do {
-            let response = try await apiClient.uploadAndProcessScreenshots(images)
-            let pending = response.transactions.map { dto in
-                let ruled = ruleEngine.applyRules(to: dto, rules: repository.rules)
-                return BudgetTransaction(
-                    id: UUID().uuidString,
-                    merchantName: ruled.merchantName,
-                    normalizedMerchantName: ruled.normalizedMerchantName,
-                    transactionDate: ruled.transactionDate ?? .now,
-                    amount: ruled.amount,
-                    currency: ruled.currency,
-                    categoryID: ruled.suggestedCategoryID,
-                    status: ruled.duplicateRisk ? .duplicate : .pendingReview,
-                    sourceImageID: nil,
-                    categorySource: ruled.suggestedCategoryID == dto.suggestedCategoryID ? .aiSuggested : .userRule,
-                    confidence: ruled.confidence,
-                    rawText: ruled.rawText,
-                    duplicateRisk: ruled.duplicateRisk,
-                    transactionType: ruled.transactionType,
-                    createdAt: .now,
-                    updatedAt: .now
-                )
-            }
-
-            repository.savePendingTransactions(pending)
-            selectedPendingTransactionIDs = Set(pending.map(\.id))
-        } catch {
-            importErrorMessage = error.localizedDescription
+    func savePendingFromResponse(_ response: ParsedImportResponse) {
+        let pending = response.transactions.map { dto in
+            let ruled = ruleEngine.applyRules(to: dto, rules: repository.rules)
+            return BudgetTransaction(
+                id: UUID().uuidString,
+                merchantName: ruled.merchantName,
+                normalizedMerchantName: ruled.normalizedMerchantName,
+                transactionDate: ruled.transactionDate ?? .now,
+                amount: ruled.amount,
+                currency: ruled.currency,
+                categoryID: ruled.suggestedCategoryID,
+                status: ruled.duplicateRisk ? .duplicate : .pendingReview,
+                categorySource: ruled.suggestedCategoryID == dto.suggestedCategoryID ? .aiSuggested : .userRule,
+                confidence: ruled.confidence,
+                rawText: ruled.rawText,
+                duplicateRisk: ruled.duplicateRisk,
+                transactionType: ruled.transactionType,
+                createdAt: .now,
+                updatedAt: .now
+            )
         }
-
-        isImporting = false
+        repository.savePendingTransactions(pending)
+        selectedPendingTransactionIDs = Set(pending.map(\.id))
     }
 
     func toggleSelection(for transactionID: String) {

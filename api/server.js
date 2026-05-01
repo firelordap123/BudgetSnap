@@ -17,11 +17,20 @@ const port = process.env.PORT || 3000;
 if (!process.env.OPENAI_API_KEY) {
   console.warn('OPENAI_API_KEY is missing. Add it to api/.env before processing imports.');
 }
-if (!process.env.API_SECRET) {
-  console.warn('API_SECRET is missing. The import endpoint will reject all requests until it is set.');
+if (!process.env.APPLE_CLIENT_ID) {
+  console.warn('APPLE_CLIENT_ID is missing. Sign in with Apple will fail until it is set.');
+}
+if (!process.env.SESSION_SECRET) {
+  console.warn('SESSION_SECRET is missing. Authenticated requests will fail until it is set.');
+}
+if (!process.env.WEB_PASSWORD) {
+  console.warn('WEB_PASSWORD is missing. Web app login will be disabled until it is set.');
 }
 if (!process.env.PLAID_CLIENT_ID || !process.env.PLAID_SECRET) {
   console.warn('PLAID_CLIENT_ID or PLAID_SECRET is missing. Plaid endpoints will fail until set.');
+}
+if (!process.env.TOKEN_ENCRYPTION_KEY) {
+  console.warn('TOKEN_ENCRYPTION_KEY is missing. Plaid access tokens will not be written until it is set.');
 }
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -77,18 +86,132 @@ const PLAID_STATIC_MAP = {
 const NEEDS_AI = new Set(['GENERAL_MERCHANDISE', 'GENERAL_SERVICES', 'SUBSCRIPTION']);
 
 const MAX_TEXTS_PER_REQUEST = 10;
+const APPLE_ISSUER = 'https://appleid.apple.com';
+const APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys';
+let appleKeysCache = null;
+let appleKeysFetchedAt = 0;
 
-function requireBearerAuth(req, res, next) {
-  const secret = process.env.API_SECRET;
-  if (!secret) {
-    return res.status(503).json({ error: 'Server is not configured for authenticated requests.' });
-  }
-  const auth = req.headers['authorization'] || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  if (token !== secret) {
+async function requireSessionAuth(req, res, next) {
+  try {
+    if (!process.env.SESSION_SECRET) {
+      return res.status(503).json({ error: 'Server is not configured for authenticated requests.' });
+    }
+    const auth = req.headers['authorization'] || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+    req.user = verifySessionToken(token);
+    return next();
+  } catch {
     return res.status(401).json({ error: 'Unauthorized.' });
   }
-  next();
+}
+
+function base64urlEncode(value) {
+  return Buffer.from(JSON.stringify(value))
+    .toString('base64url');
+}
+
+function base64urlDecode(value) {
+  return JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+}
+
+function signSessionToken(user) {
+  if (!process.env.SESSION_SECRET) {
+    throw new Error('SESSION_SECRET is required to issue sessions.');
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64urlEncode({ alg: 'HS256', typ: 'JWT' });
+  const payload = base64urlEncode({
+    sub: user.id,
+    iat: now,
+    exp: now + 60 * 60 * 24 * 30,
+  });
+  const body = `${header}.${payload}`;
+  const signature = crypto
+    .createHmac('sha256', process.env.SESSION_SECRET)
+    .update(body)
+    .digest('base64url');
+  return `${body}.${signature}`;
+}
+
+function verifySessionToken(token) {
+  const [header, payload, signature] = token.split('.');
+  if (!header || !payload || !signature) {
+    throw new Error('Invalid session token.');
+  }
+  const body = `${header}.${payload}`;
+  const expectedSignature = crypto
+    .createHmac('sha256', process.env.SESSION_SECRET)
+    .update(body)
+    .digest('base64url');
+  const signatureBytes = Buffer.from(signature);
+  const expectedBytes = Buffer.from(expectedSignature);
+  if (signatureBytes.length !== expectedBytes.length || !crypto.timingSafeEqual(signatureBytes, expectedBytes)) {
+    throw new Error('Invalid session signature.');
+  }
+  const claims = base64urlDecode(payload);
+  if (!claims.sub || !claims.exp || claims.exp <= Math.floor(Date.now() / 1000)) {
+    throw new Error('Expired session token.');
+  }
+  return { id: claims.sub };
+}
+
+function decodeJwtParts(token) {
+  const [header, payload, signature] = token.split('.');
+  if (!header || !payload || !signature) {
+    throw new Error('Invalid JWT.');
+  }
+  return {
+    header: base64urlDecode(header),
+    payload: base64urlDecode(payload),
+    signedData: `${header}.${payload}`,
+    signature: Buffer.from(signature, 'base64url'),
+  };
+}
+
+async function getAppleSigningKeys() {
+  const cacheTTL = 1000 * 60 * 60 * 12;
+  if (appleKeysCache && Date.now() - appleKeysFetchedAt < cacheTTL) {
+    return appleKeysCache;
+  }
+  const response = await fetch(APPLE_JWKS_URL);
+  if (!response.ok) {
+    throw new Error('Could not fetch Apple signing keys.');
+  }
+  const jwks = await response.json();
+  appleKeysCache = jwks.keys || [];
+  appleKeysFetchedAt = Date.now();
+  return appleKeysCache;
+}
+
+async function verifyAppleIdentityToken(identityToken) {
+  if (!process.env.APPLE_CLIENT_ID) {
+    throw new Error('APPLE_CLIENT_ID is required to verify Apple identity tokens.');
+  }
+
+  const jwt = decodeJwtParts(identityToken);
+  const keys = await getAppleSigningKeys();
+  const jwk = keys.find(key => key.kid === jwt.header.kid && key.alg === jwt.header.alg);
+  if (!jwk) {
+    throw new Error('No matching Apple signing key found.');
+  }
+
+  const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+  const isValid = crypto.verify(
+    'RSA-SHA256',
+    Buffer.from(jwt.signedData),
+    publicKey,
+    jwt.signature
+  );
+  if (!isValid) {
+    throw new Error('Invalid Apple identity token signature.');
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (jwt.payload.iss !== APPLE_ISSUER || jwt.payload.aud !== process.env.APPLE_CLIENT_ID || jwt.payload.exp <= now) {
+    throw new Error('Invalid Apple identity token claims.');
+  }
+
+  return { id: `apple:${jwt.payload.sub}` };
 }
 
 // ─── Token file helpers ──────────────────────────────────────────────────────
@@ -96,14 +219,69 @@ function requireBearerAuth(req, res, next) {
 async function readTokens() {
   try {
     const raw = await fs.readFile(TOKENS_PATH, 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return [];
+    return JSON.parse(raw).map(decryptTokenEntry);
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
   }
 }
 
 async function writeTokens(tokens) {
-  await fs.writeFile(TOKENS_PATH, JSON.stringify(tokens, null, 2));
+  if (!process.env.TOKEN_ENCRYPTION_KEY) {
+    throw new Error('TOKEN_ENCRYPTION_KEY is required before writing Plaid access tokens.');
+  }
+  await fs.writeFile(TOKENS_PATH, JSON.stringify(tokens.map(encryptTokenEntry), null, 2));
+}
+
+function encryptionKey() {
+  if (!process.env.TOKEN_ENCRYPTION_KEY) {
+    throw new Error('TOKEN_ENCRYPTION_KEY is required to decrypt Plaid access tokens.');
+  }
+  return crypto.createHash('sha256').update(process.env.TOKEN_ENCRYPTION_KEY).digest();
+}
+
+function encryptAccessToken(accessToken) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(accessToken, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [
+    iv.toString('base64'),
+    tag.toString('base64'),
+    encrypted.toString('base64'),
+  ].join(':');
+}
+
+function decryptAccessToken(encryptedAccessToken) {
+  const [ivValue, tagValue, encryptedValue] = encryptedAccessToken.split(':');
+  const decipher = crypto.createDecipheriv(
+    'aes-256-gcm',
+    encryptionKey(),
+    Buffer.from(ivValue, 'base64')
+  );
+  decipher.setAuthTag(Buffer.from(tagValue, 'base64'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encryptedValue, 'base64')),
+    decipher.final(),
+  ]).toString('utf8');
+}
+
+function encryptTokenEntry(entry) {
+  const { accessToken, ...rest } = entry;
+  return {
+    ...rest,
+    accessTokenEncrypted: encryptAccessToken(accessToken),
+  };
+}
+
+function decryptTokenEntry(entry) {
+  if (entry.accessTokenEncrypted) {
+    return {
+      ...entry,
+      accessToken: decryptAccessToken(entry.accessTokenEncrypted),
+    };
+  }
+  return entry;
 }
 
 // ─── Plaid categorizer ───────────────────────────────────────────────────────
@@ -113,6 +291,7 @@ function buildTransactionDTO(t, categoryID, confidence) {
   const normalized = name.trim().toUpperCase().replace(/[^A-Z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
   const safeCategory = allowedCategoryIDs.includes(categoryID) ? categoryID : 'cat_misc';
   return {
+    externalID: t.transaction_id || null,
     merchantName: name.trim(),
     normalizedMerchantName: normalized,
     transactionDate: t.date,
@@ -209,12 +388,42 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'BudgetSnap API' });
 });
 
+// ─── Auth: Password (web) ────────────────────────────────────────────────────
+
+app.post('/api/auth/password', (req, res) => {
+  if (!process.env.WEB_PASSWORD) {
+    return res.status(503).json({ error: 'Web login is not configured on this server.' });
+  }
+  const { password } = req.body;
+  if (!password || password !== process.env.WEB_PASSWORD) {
+    return res.status(401).json({ error: 'Incorrect password.' });
+  }
+  res.json({ sessionToken: signSessionToken({ id: 'web:owner' }) });
+});
+
+// ─── Auth: Sign in with Apple ─────────────────────────────────────────────────
+
+app.post('/api/auth/apple', async (req, res) => {
+  try {
+    const { identityToken } = req.body;
+    if (!identityToken) {
+      return res.status(400).json({ error: 'identityToken is required.' });
+    }
+
+    const user = await verifyAppleIdentityToken(identityToken);
+    res.json({ sessionToken: signSessionToken(user) });
+  } catch (error) {
+    console.error(error);
+    res.status(401).json({ error: 'Could not verify Apple sign-in.' });
+  }
+});
+
 // ─── Plaid: create link token ─────────────────────────────────────────────────
 
-app.post('/api/plaid/link-token', requireBearerAuth, async (req, res) => {
+app.post('/api/plaid/link-token', requireSessionAuth, async (req, res) => {
   try {
     const response = await plaidClient.linkTokenCreate({
-      user: { client_user_id: 'budgetsnap-user' },
+      user: { client_user_id: req.user.id },
       client_name: 'BudgetSnap',
       products: [Products.Transactions],
       country_codes: [CountryCode.Us],
@@ -229,7 +438,7 @@ app.post('/api/plaid/link-token', requireBearerAuth, async (req, res) => {
 
 // ─── Plaid: exchange public token ─────────────────────────────────────────────
 
-app.post('/api/plaid/exchange-token', requireBearerAuth, async (req, res) => {
+app.post('/api/plaid/exchange-token', requireSessionAuth, async (req, res) => {
   try {
     const { publicToken, institutionName, institutionId } = req.body;
     if (!publicToken) return res.status(400).json({ error: 'publicToken is required.' });
@@ -238,9 +447,10 @@ app.post('/api/plaid/exchange-token', requireBearerAuth, async (req, res) => {
     const { access_token, item_id } = exchangeResponse.data;
 
     const tokens = await readTokens();
-    const existingIndex = tokens.findIndex(t => t.itemId === item_id);
+    const existingIndex = tokens.findIndex(t => t.userID === req.user.id && t.itemId === item_id);
     const entry = {
       id: crypto.randomUUID(),
+      userID: req.user.id,
       institutionName: institutionName || 'Unknown',
       institutionId: institutionId || '',
       accessToken: access_token,
@@ -264,12 +474,14 @@ app.post('/api/plaid/exchange-token', requireBearerAuth, async (req, res) => {
 
 // ─── Plaid: list linked accounts ──────────────────────────────────────────────
 
-app.get('/api/plaid/accounts', requireBearerAuth, async (req, res) => {
+app.get('/api/plaid/accounts', requireSessionAuth, async (req, res) => {
   try {
     const tokens = await readTokens();
-    const accounts = tokens.map(({ id, institutionName, institutionId, itemId, linkedAt }) => ({
-      id, institutionName, institutionId, itemId, linkedAt,
-    }));
+    const accounts = tokens
+      .filter(token => token.userID === req.user.id)
+      .map(({ id, institutionName, institutionId, itemId, linkedAt }) => ({
+        id, institutionName, institutionId, itemId, linkedAt,
+      }));
     res.json({ accounts });
   } catch (error) {
     console.error(error);
@@ -279,11 +491,12 @@ app.get('/api/plaid/accounts', requireBearerAuth, async (req, res) => {
 
 // ─── Plaid: sync transactions ─────────────────────────────────────────────────
 
-app.post('/api/plaid/sync', requireBearerAuth, async (req, res) => {
+app.post('/api/plaid/sync', requireSessionAuth, async (req, res) => {
   try {
     const { itemId } = req.body;
     const tokens = await readTokens();
-    const targets = itemId ? tokens.filter(t => t.itemId === itemId) : tokens;
+    const userTokens = tokens.filter(t => t.userID === req.user.id);
+    const targets = itemId ? userTokens.filter(t => t.itemId === itemId) : userTokens;
 
     if (targets.length === 0) {
       return res.status(404).json({ error: 'No linked accounts found.' });
@@ -298,13 +511,19 @@ app.post('/api/plaid/sync', requireBearerAuth, async (req, res) => {
 
     let allRaw = [];
     for (const token of targets) {
-      const txnResponse = await plaidClient.transactionsGet({
-        access_token: token.accessToken,
-        start_date: startDate,
-        end_date: endDate,
-        options: { count: 500, offset: 0 },
-      });
-      allRaw.push(...txnResponse.data.transactions);
+      let offset = 0;
+      let total = 0;
+      do {
+        const txnResponse = await plaidClient.transactionsGet({
+          access_token: token.accessToken,
+          start_date: startDate,
+          end_date: endDate,
+          options: { count: 500, offset },
+        });
+        allRaw.push(...txnResponse.data.transactions);
+        total = txnResponse.data.total_transactions;
+        offset += txnResponse.data.transactions.length;
+      } while (offset < total);
     }
 
     // Exclude pending and credits (Plaid: positive amount = debit/expense)
@@ -325,7 +544,7 @@ app.post('/api/plaid/sync', requireBearerAuth, async (req, res) => {
 
 // ─── Legacy: screenshot import (kept until Plaid flow is confirmed) ───────────
 
-app.post('/api/imports/screenshots/process', requireBearerAuth, async (req, res) => {
+app.post('/api/imports/screenshots/process', requireSessionAuth, async (req, res) => {
   try {
     const texts = req.body?.texts || [];
 

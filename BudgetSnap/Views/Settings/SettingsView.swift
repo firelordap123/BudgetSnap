@@ -3,27 +3,13 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @State private var deleteScreenshots = true
-    @State private var keepRawText = false
     @State private var newCategoryName = ""
 
     var body: some View {
         NavigationStack {
             List {
                 Section("Privacy") {
-                    Toggle("Delete screenshots after successful import", isOn: $deleteScreenshots)
-                    Toggle("Keep raw OCR text for review", isOn: $keepRawText)
-                    NavigationLink("Delete account and all data") {
-                        Text("Wire this screen to your backend account deletion endpoint.")
-                            .padding()
-                            .navigationTitle("Delete Account")
-                    }
-                }
-
-                Section("API Integration") {
-                    LabeledContent("Import client", value: "MockImportAPIClient")
-                    Text("Swap `MockImportAPIClient` for `URLSessionImportAPIClient` in the app entry point when your backend is ready.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Toggle("Delete screenshots after import", isOn: $deleteScreenshots)
                 }
 
                 Section("Categories") {
@@ -42,7 +28,7 @@ struct SettingsView: View {
 
                 Section("Saved Rules") {
                     if store.rules.isEmpty {
-                        Text("No saved merchant rules yet.")
+                        Text("No saved rules yet.")
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(store.rules) { rule in
@@ -110,10 +96,6 @@ private struct RuleRow: View {
             }
 
             HStack {
-                Text("Used \(rule.usageCount) times")
-                if let lastUsed = rule.lastUsedAt {
-                    Text("Last used \(Formatters.shortDate.string(from: lastUsed))")
-                }
                 Spacer()
                 Button(role: .destructive) {
                     store.deleteRule(rule)

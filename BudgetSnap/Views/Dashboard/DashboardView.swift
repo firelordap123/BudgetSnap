@@ -107,7 +107,7 @@ private struct ReviewQueueBanner: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(count) transactions need review")
                     .font(.headline)
-                Text("Approve parsed charges before they affect your budget.")
+                Text("Approve before they affect your budget.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -134,7 +134,7 @@ private struct MetricPill: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(.black.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 

@@ -7,7 +7,7 @@ struct ReviewImportView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 if store.pendingTransactions.isEmpty {
-                    ContentUnavailableView("Nothing to review", systemImage: "checkmark.seal", description: Text("Parsed transactions will appear here before they affect your budget."))
+                    ContentUnavailableView("Nothing to review", systemImage: "checkmark.seal", description: Text("Imported transactions will appear here before they affect your budget."))
                         .premiumCard()
                 } else {
                     reviewHeader
@@ -48,7 +48,7 @@ struct ReviewImportView: View {
                         .disabled(store.selectedPendingTransactionIDs.isEmpty)
                     Button("Accept All") { store.acceptAllPending() }
                         .buttonStyle(.bordered)
-                    Button("Reject Import", role: .destructive) {
+                    Button("Reject All", role: .destructive) {
                         store.pendingTransactions.forEach { store.reject($0) }
                     }
                     .buttonStyle(.bordered)
@@ -63,18 +63,12 @@ struct ReviewImportView: View {
     }
 
     private var reviewHeader: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("\(store.pendingTransactions.count) parsed charges", systemImage: "sparkles")
-                    .font(.headline)
-                Spacer()
-                Text("\(store.selectedPendingTransactionIDs.count) selected")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-
-            Text("Review merchant, date, amount, category source, confidence, and duplicates before posting anything to the budget.")
-                .font(.subheadline)
+        HStack {
+            Text("\(store.pendingTransactions.count) transactions to review")
+                .font(.headline)
+            Spacer()
+            Text("\(store.selectedPendingTransactionIDs.count) selected")
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
         }
         .premiumCard()

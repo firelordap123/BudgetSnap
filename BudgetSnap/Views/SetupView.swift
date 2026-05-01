@@ -12,16 +12,16 @@ struct SetupView: View {
                         Text("BudgetSnap")
                             .font(.system(size: 44, weight: .bold, design: .serif))
                             .foregroundStyle(AppTheme.ink)
-                        Text("Screenshot-based budgeting with review-first AI imports.")
+                        Text("Simple budgeting, one screenshot at a time.")
                             .font(.title3.weight(.medium))
                             .foregroundStyle(AppTheme.muted)
                     }
                     .padding(.top, 34)
 
                     VStack(spacing: 12) {
-                        SetupStep(icon: "camera.viewfinder", title: "Import screenshots", detail: "Select banking, credit card, receipt, or statement screenshots.")
-                        SetupStep(icon: "sparkles", title: "Review AI results", detail: "Parsed charges stay pending until you accept them.")
-                        SetupStep(icon: "brain.head.profile", title: "Remember corrections", detail: "Merchant rules learn your preferred categories over time.")
+                        SetupStep(icon: "camera.viewfinder", title: "Import screenshots", detail: "Select banking, credit card, or statement screenshots.")
+                        SetupStep(icon: "checkmark.circle", title: "Review imports", detail: "Imported transactions stay pending until you accept them.")
+                        SetupStep(icon: "bookmark.fill", title: "Remember corrections", detail: "Your category choices are saved for future imports.")
                     }
 
                     VStack(alignment: .leading, spacing: 12) {
@@ -31,7 +31,7 @@ struct SetupView: View {
                             .keyboardType(.decimalPad)
                             .font(.title2.weight(.semibold))
                             .padding(14)
-                            .background(.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
                     .premiumCard()
 

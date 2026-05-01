@@ -18,7 +18,6 @@ struct TransactionEditorView: View {
             Form {
                 Section("Transaction") {
                     TextField("Merchant", text: $transaction.normalizedMerchantName)
-                    TextField("Original merchant text", text: $transaction.merchantName)
                     DatePicker("Date", selection: $transaction.transactionDate, displayedComponents: .date)
                     TextField("Amount", text: $amountText)
                         .keyboardType(.decimalPad)
@@ -33,17 +32,8 @@ struct TransactionEditorView: View {
                     Toggle("Remember this merchant", isOn: $rememberRule)
                 }
 
-                Section("Traceability") {
-                    LabeledContent("Status", value: transaction.status.displayName)
-                    LabeledContent("Source", value: transaction.categorySource.displayName)
-                    LabeledContent("Confidence", value: "\(Int(transaction.confidence * 100))%")
-                    Text(transaction.rawText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
                 Section {
-                    Button("Mark Possible Duplicate", role: .destructive) {
+                    Button("Mark as Duplicate", role: .destructive) {
                         store.markDuplicate(transaction)
                         dismiss()
                     }

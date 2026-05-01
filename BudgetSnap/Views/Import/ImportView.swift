@@ -20,8 +20,6 @@ struct ImportView: View {
                         processButton
                     }
 
-                    pipelineCard
-
                     if let error = store.importErrorMessage {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(AppTheme.danger)
@@ -43,12 +41,12 @@ struct ImportView: View {
 
     private var heroCard: some View {
         VStack(alignment: .leading, spacing: 13) {
-            Image(systemName: "sparkles.rectangle.stack.fill")
+            Image(systemName: "camera.viewfinder")
                 .font(.largeTitle)
                 .foregroundStyle(AppTheme.accent)
-            Text("Turn screenshots into budget-ready transactions.")
+            Text("Turn screenshots into transactions.")
                 .font(.title2.weight(.bold))
-            Text("Images go to your backend import API. Parsed charges return here as pending review cards.")
+            Text("Select screenshots from your photo library to extract transactions.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -127,17 +125,7 @@ struct ImportView: View {
                 }
                 .padding(.vertical, 4)
             }
-        }
-        .premiumCard()
-    }
-
-    private var pipelineCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("Backend handoff", systemImage: "server.rack")
-                .font(.headline)
-            PipelineRow(number: "1", title: "Upload images", detail: "POST multipart screenshots to your API.")
-            PipelineRow(number: "2", title: "OCR + LLM parse", detail: "Return strict transaction JSON with confidence and raw text.")
-            PipelineRow(number: "3", title: "Review state", detail: "Nothing posts until the user accepts parsed charges.")
+            .scrollIndicators(.hidden)
         }
         .premiumCard()
     }
@@ -150,25 +138,5 @@ struct ImportView: View {
             }
         }
         selectedImageData = dataList
-    }
-}
-
-private struct PipelineRow: View {
-    let number: String
-    let title: String
-    let detail: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(number)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 24, height: 24)
-                .background(AppTheme.accent, in: Circle())
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.subheadline.weight(.semibold))
-                Text(detail).font(.caption).foregroundStyle(.secondary)
-            }
-        }
     }
 }

@@ -61,7 +61,7 @@ struct TransactionsView: View {
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(selectedCategoryID == nil ? AppTheme.accent.opacity(0.16) : .black.opacity(0.07), in: Capsule())
+                        .background(selectedCategoryID == nil ? AppTheme.accent.opacity(0.16) : .primary.opacity(0.07), in: Capsule())
                 }
                 .buttonStyle(.plain)
 
@@ -77,5 +77,6 @@ struct TransactionsView: View {
             }
             .padding(.vertical, 2)
         }
+        .scrollIndicators(.hidden)
     }
 }

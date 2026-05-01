@@ -48,7 +48,7 @@ struct TransactionCard: View {
                 } label: {
                     Image(systemName: "pencil")
                         .frame(width: 34, height: 34)
-                        .background(.black.opacity(0.055), in: Circle())
+                        .background(.primary.opacity(0.08), in: Circle())
                 }
                 .buttonStyle(.plain)
 
@@ -64,10 +64,8 @@ struct TransactionCard: View {
                 }
             }
 
-            HStack(spacing: 7) {
-                SourceBadge(text: transaction.categorySource.displayName)
-                if transaction.confidence < 0.8 { SourceBadge(text: "Low confidence", isWarning: true) }
-                if transaction.duplicateRisk { SourceBadge(text: "Possible duplicate", isWarning: true) }
+            if transaction.duplicateRisk {
+                DuplicateBadge()
             }
 
             if allowsSelection {
@@ -84,16 +82,13 @@ struct TransactionCard: View {
     }
 }
 
-private struct SourceBadge: View {
-    let text: String
-    var isWarning = false
-
+private struct DuplicateBadge: View {
     var body: some View {
-        Text(text)
+        Text("Possible duplicate")
             .font(.caption2.weight(.semibold))
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .background(isWarning ? AppTheme.warning.opacity(0.15) : .black.opacity(0.07), in: Capsule())
-            .foregroundStyle(isWarning ? AppTheme.warning : .secondary)
+            .background(AppTheme.warning.opacity(0.15), in: Capsule())
+            .foregroundStyle(AppTheme.warning)
     }
 }

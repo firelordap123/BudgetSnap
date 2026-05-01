@@ -12,17 +12,17 @@ struct PlaidLinkView: UIViewControllerRepresentable {
         let vc = UIViewController()
         vc.view.backgroundColor = .systemBackground
 
-        var config = LinkTokenConfiguration(token: linkToken) { success in
-            let name = success.metadata.institution?.name ?? "Unknown"
-            let id = success.metadata.institution?.id ?? ""
-            onSuccess(success.publicToken, name, id)
+        var config = LinkTokenConfiguration(token: linkToken) { (success: LinkSuccess) in
+            let institution = success.metadata.institution
+            onSuccess(success.publicToken, institution.name, institution.id)
         }
-        config.onExit = { _ in onExit() }
+        config.onExit = { (_: LinkExit) in onExit() }
 
         switch Plaid.create(config) {
         case .success(let handler):
             context.coordinator.handler = handler
-            handler.open(presentUsing: .viewController(vc))
+            let mode: OpenMode = .viewController(vc)
+            handler.open(presentUsing: mode)
         case .failure:
             onExit()
         }

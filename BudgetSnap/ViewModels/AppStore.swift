@@ -4,15 +4,18 @@ import Combine
 @MainActor
 final class AppStore: ObservableObject {
     private var repository: any BudgetRepository
+    private let plaidClient: any PlaidAPIClient
     private let ruleEngine = CategorizationRuleEngine()
 
     @Published var isSyncing = false
     @Published var syncErrorMessage: String?
+    @Published var linkedAccounts: [PlaidLinkedAccount] = []
     @Published var selectedPendingTransactionIDs = Set<String>()
     @Published var didCompleteSetup = false
 
-    init(repository: any BudgetRepository) {
+    init(repository: any BudgetRepository, plaidClient: any PlaidAPIClient) {
         self.repository = repository
+        self.plaidClient = plaidClient
     }
 
     var allCategories: [SpendingCategory] { repository.categories }
@@ -87,6 +90,39 @@ final class AppStore: ObservableObject {
         }
         repository.savePendingTransactions(pending)
         selectedPendingTransactionIDs = Set(pending.map(\.id))
+    }
+
+    func createLinkToken() async throws -> String {
+        try await plaidClient.createLinkToken()
+    }
+
+    func exchangePlaidToken(publicToken: String, institutionName: String, institutionId: String) async {
+        do {
+            try await plaidClient.exchangeToken(publicToken: publicToken, institutionName: institutionName, institutionId: institutionId)
+            await loadLinkedAccounts()
+        } catch {
+            syncErrorMessage = error.localizedDescription
+        }
+    }
+
+    func loadLinkedAccounts() async {
+        do {
+            linkedAccounts = try await plaidClient.fetchLinkedAccounts()
+        } catch {
+            syncErrorMessage = error.localizedDescription
+        }
+    }
+
+    func syncPlaid(itemId: String? = nil) async {
+        isSyncing = true
+        syncErrorMessage = nil
+        do {
+            let response = try await plaidClient.syncTransactions(itemId: itemId)
+            savePendingFromResponse(response)
+        } catch {
+            syncErrorMessage = error.localizedDescription
+        }
+        isSyncing = false
     }
 
     func toggleSelection(for transactionID: String) {

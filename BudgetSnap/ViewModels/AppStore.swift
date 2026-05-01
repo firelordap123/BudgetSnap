@@ -94,7 +94,6 @@ final class AppStore: ObservableObject {
                 )
             }
 
-            objectWillChange.send()
             repository.savePendingTransactions(pending)
             selectedPendingTransactionIDs = Set(pending.map(\.id))
         } catch {
@@ -113,30 +112,25 @@ final class AppStore: ObservableObject {
     }
 
     func acceptAllPending() {
-        objectWillChange.send()
         repository.acceptTransactions(ids: Set(pendingTransactions.map(\.id)))
         selectedPendingTransactionIDs.removeAll()
     }
 
     func acceptSelectedPending() {
-        objectWillChange.send()
         repository.acceptTransactions(ids: selectedPendingTransactionIDs)
         selectedPendingTransactionIDs.removeAll()
     }
 
     func reject(_ transaction: BudgetTransaction) {
-        objectWillChange.send()
         repository.rejectTransaction(id: transaction.id)
         selectedPendingTransactionIDs.remove(transaction.id)
     }
 
     func updateTransaction(_ transaction: BudgetTransaction) {
-        objectWillChange.send()
         repository.updateTransaction(transaction)
     }
 
     func markDuplicate(_ transaction: BudgetTransaction) {
-        objectWillChange.send()
         var updated = transaction
         updated.status = .duplicate
         updated.duplicateRisk = true
@@ -145,7 +139,6 @@ final class AppStore: ObservableObject {
     }
 
     func updateCategory(transaction: BudgetTransaction, categoryID: String, rememberRule: Bool) {
-        objectWillChange.send()
         var updated = transaction
         updated.categoryID = categoryID
         updated.categorySource = .userCorrected
@@ -159,7 +152,6 @@ final class AppStore: ObservableObject {
     }
 
     func updateTotalBudget(_ amount: Decimal) {
-        objectWillChange.send()
         var budget = repository.monthlyBudget
         budget.totalBudget = amount
         repository.updateMonthlyBudget(budget)
@@ -170,24 +162,20 @@ final class AppStore: ObservableObject {
     }
 
     func updateCategoryBudget(categoryID: String, amount: Decimal) {
-        objectWillChange.send()
         repository.updateCategoryBudget(categoryID: categoryID, amount: amount)
     }
 
     func updateRule(_ rule: CategorizationRule) {
-        objectWillChange.send()
         repository.updateRule(rule)
     }
 
     func deleteRule(_ rule: CategorizationRule) {
-        objectWillChange.send()
         repository.deleteRule(id: rule.id)
     }
 
     func addCategory(name: String, systemImage: String = "tag.fill", colorName: String = "teal") {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        objectWillChange.send()
         repository.addCategory(
             SpendingCategory(
                 id: "cat_\(UUID().uuidString)",
@@ -201,7 +189,6 @@ final class AppStore: ObservableObject {
     }
 
     func updateCategory(_ category: SpendingCategory) {
-        objectWillChange.send()
         repository.updateCategory(category)
     }
 }

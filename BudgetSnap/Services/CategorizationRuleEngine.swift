@@ -14,13 +14,7 @@ struct CategorizationRuleEngine {
     }
 
     func createRule(from transaction: BudgetTransaction, matchType: RuleMatchType = .contains) -> CategorizationRule {
-        let matchValue: String
-        switch matchType {
-        case .exact:
-            matchValue = transaction.normalizedMerchantName.normalizedForMatching
-        case .contains, .startsWith:
-            matchValue = transaction.normalizedMerchantName.normalizedForMatching
-        }
+        let matchValue = transaction.normalizedMerchantName.normalizedForMatching
 
         return CategorizationRule(
             id: UUID().uuidString,

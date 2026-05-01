@@ -11,6 +11,12 @@ struct PlaidLinkView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
         let vc = UIViewController()
         vc.view.backgroundColor = .systemBackground
+        return vc
+    }
+
+    // Called after the VC is in the window hierarchy — safe to present from here
+    func updateUIViewController(_ vc: UIViewController, context: Context) {
+        guard context.coordinator.handler == nil else { return }
 
         var config = LinkTokenConfiguration(token: linkToken) { (success: LinkSuccess) in
             let institution = success.metadata.institution
@@ -26,11 +32,7 @@ struct PlaidLinkView: UIViewControllerRepresentable {
         case .failure:
             onExit()
         }
-
-        return vc
     }
-
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
 
     final class Coordinator {
         var handler: Handler?

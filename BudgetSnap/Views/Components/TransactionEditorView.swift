@@ -3,7 +3,6 @@ import SwiftUI
 struct TransactionEditorView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
-    @FocusState private var amountFocused: Bool
 
     @State private var transaction: BudgetTransaction
     @State private var amountText: String
@@ -25,11 +24,7 @@ struct TransactionEditorView: View {
                             .foregroundStyle(.secondary)
                         TextField("0.00", text: $amountText)
                             .keyboardType(.decimalPad)
-                            .focused($amountFocused)
                             .multilineTextAlignment(.trailing)
-                            .onChange(of: amountFocused) { _, focused in
-                                if focused { amountText = "" }
-                            }
                     }
                 }
 
@@ -56,7 +51,9 @@ struct TransactionEditorView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        transaction.amount = Decimal(string: amountText) ?? transaction.amount
+                        if let amount = Decimal(string: amountText, locale: Locale(identifier: "en_US")) {
+                            transaction.amount = amount
+                        }
                         transaction.updatedAt = .now
                         store.updateTransaction(transaction)
                         if rememberRule {

@@ -23,7 +23,10 @@ struct BudgetsView: View {
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("Budgets")
             .onAppear {
-                totalBudgetText = NSDecimalNumber(decimal: store.dashboardSummary.totalBudget).stringValue
+                totalBudgetText = formatDecimal(store.dashboardSummary.totalBudget)
+            }
+            .onChange(of: store.dashboardSummary.totalBudget) { _, newValue in
+                totalBudgetText = formatDecimal(newValue)
             }
         }
     }
@@ -33,11 +36,14 @@ struct BudgetsView: View {
             Label("Total Monthly Budget", systemImage: "target")
                 .font(.headline)
             HStack {
-                TextField("Amount", text: $totalBudgetText)
+                Text("$").foregroundStyle(.secondary)
+                TextField("0.00", text: $totalBudgetText)
                     .keyboardType(.decimalPad)
                     .font(.title2.weight(.bold))
                 Button("Save") {
-                    store.updateTotalBudget(Decimal(string: totalBudgetText) ?? store.dashboardSummary.totalBudget)
+                    if let amount = parseDecimal(totalBudgetText) {
+                        store.updateTotalBudget(amount)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -70,10 +76,13 @@ private struct CategoryBudgetEditor: View {
                 .tint(summary.percentUsed > 1 ? AppTheme.danger : summary.category.color)
 
             HStack {
-                TextField("Budget", text: $budgetText)
+                Text("$").foregroundStyle(.secondary)
+                TextField("0.00", text: $budgetText)
                     .keyboardType(.decimalPad)
                 Button("Update") {
-                    store.updateCategoryBudget(categoryID: summary.category.id, amount: Decimal(string: budgetText) ?? summary.budget)
+                    if let amount = parseDecimal(budgetText) {
+                        store.updateCategoryBudget(categoryID: summary.category.id, amount: amount)
+                    }
                 }
                 .buttonStyle(.bordered)
             }
@@ -84,7 +93,18 @@ private struct CategoryBudgetEditor: View {
         }
         .premiumCard()
         .onAppear {
-            budgetText = NSDecimalNumber(decimal: summary.budget).stringValue
+            budgetText = formatDecimal(summary.budget)
+        }
+        .onChange(of: summary.budget) { _, newValue in
+            budgetText = formatDecimal(newValue)
         }
     }
+}
+
+private func formatDecimal(_ value: Decimal) -> String {
+    String(format: "%.2f", NSDecimalNumber(decimal: value).doubleValue)
+}
+
+private func parseDecimal(_ text: String) -> Decimal? {
+    Decimal(string: text, locale: Locale(identifier: "en_US"))
 }

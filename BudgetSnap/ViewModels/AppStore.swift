@@ -11,7 +11,15 @@ final class AppStore: ObservableObject {
     @Published var syncErrorMessage: String?
     @Published var linkedAccounts: [PlaidLinkedAccount] = []
     @Published var selectedPendingTransactionIDs = Set<String>()
-    @Published var didCompleteSetup = false
+
+    // Persisted across launches via UserDefaults
+    var didCompleteSetup: Bool {
+        get { UserDefaults.standard.bool(forKey: "didCompleteSetup") }
+        set {
+            objectWillChange.send()
+            UserDefaults.standard.set(newValue, forKey: "didCompleteSetup")
+        }
+    }
 
     init(repository: any BudgetRepository, plaidClient: any PlaidAPIClient) {
         self.repository = repository
@@ -88,6 +96,7 @@ final class AppStore: ObservableObject {
                 updatedAt: .now
             )
         }
+        objectWillChange.send()
         repository.savePendingTransactions(pending)
         selectedPendingTransactionIDs = Set(pending.map(\.id))
     }
@@ -134,21 +143,25 @@ final class AppStore: ObservableObject {
     }
 
     func acceptAllPending() {
+        objectWillChange.send()
         repository.acceptTransactions(ids: Set(pendingTransactions.map(\.id)))
         selectedPendingTransactionIDs.removeAll()
     }
 
     func acceptSelectedPending() {
+        objectWillChange.send()
         repository.acceptTransactions(ids: selectedPendingTransactionIDs)
         selectedPendingTransactionIDs.removeAll()
     }
 
     func reject(_ transaction: BudgetTransaction) {
+        objectWillChange.send()
         repository.rejectTransaction(id: transaction.id)
         selectedPendingTransactionIDs.remove(transaction.id)
     }
 
     func updateTransaction(_ transaction: BudgetTransaction) {
+        objectWillChange.send()
         repository.updateTransaction(transaction)
     }
 
@@ -157,6 +170,7 @@ final class AppStore: ObservableObject {
         updated.status = .duplicate
         updated.duplicateRisk = true
         updated.updatedAt = .now
+        objectWillChange.send()
         repository.updateTransaction(updated)
     }
 
@@ -165,17 +179,17 @@ final class AppStore: ObservableObject {
         updated.categoryID = categoryID
         updated.categorySource = .userCorrected
         updated.updatedAt = .now
+        objectWillChange.send()
         repository.updateTransaction(updated)
-
         if rememberRule {
-            let rule = ruleEngine.createRule(from: updated)
-            repository.addRule(rule)
+            repository.addRule(ruleEngine.createRule(from: updated))
         }
     }
 
     func updateTotalBudget(_ amount: Decimal) {
         var budget = repository.monthlyBudget
         budget.totalBudget = amount
+        objectWillChange.send()
         repository.updateMonthlyBudget(budget)
     }
 
@@ -184,20 +198,24 @@ final class AppStore: ObservableObject {
     }
 
     func updateCategoryBudget(categoryID: String, amount: Decimal) {
+        objectWillChange.send()
         repository.updateCategoryBudget(categoryID: categoryID, amount: amount)
     }
 
     func updateRule(_ rule: CategorizationRule) {
+        objectWillChange.send()
         repository.updateRule(rule)
     }
 
     func deleteRule(_ rule: CategorizationRule) {
+        objectWillChange.send()
         repository.deleteRule(id: rule.id)
     }
 
     func addCategory(name: String, systemImage: String = "tag.fill", colorName: String = "teal") {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        objectWillChange.send()
         repository.addCategory(
             SpendingCategory(
                 id: "cat_\(UUID().uuidString)",
@@ -211,6 +229,7 @@ final class AppStore: ObservableObject {
     }
 
     func updateCategory(_ category: SpendingCategory) {
+        objectWillChange.send()
         repository.updateCategory(category)
     }
 }

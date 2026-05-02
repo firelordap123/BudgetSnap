@@ -123,7 +123,7 @@ function signSessionToken(user) {
   const payload = base64urlEncode({
     sub: user.id,
     iat: now,
-    exp: now + 60 * 60 * 24 * 30,
+    exp: now + 60 * 60 * 24 * 365,
   });
   const body = `${header}.${payload}`;
   const signature = crypto

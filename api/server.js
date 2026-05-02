@@ -520,6 +520,58 @@ function transactionRowValues(userID, transaction) {
   ];
 }
 
+function parsePositiveInteger(value, fallback, max) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, max);
+}
+
+function escapeLikePattern(value) {
+  return String(value).replace(/[\\%_]/g, match => `\\${match}`);
+}
+
+function buildTransactionFilters(userID, query) {
+  const where = ['user_id = $1'];
+  const values = [userID];
+
+  if (query.status && query.status !== 'all') {
+    values.push(String(query.status));
+    where.push(`status = $${values.length}`);
+  }
+  if (query.categoryID) {
+    values.push(String(query.categoryID));
+    where.push(`category_id = $${values.length}`);
+  }
+  if (query.from && isDateKey(String(query.from))) {
+    values.push(String(query.from));
+    where.push(`transaction_date >= $${values.length}`);
+  }
+  if (query.to && isDateKey(String(query.to))) {
+    values.push(String(query.to));
+    where.push(`transaction_date <= $${values.length}`);
+  }
+  if (query.min !== undefined && query.min !== '') {
+    const min = Number(query.min);
+    if (Number.isFinite(min)) {
+      values.push(min);
+      where.push(`amount >= $${values.length}`);
+    }
+  }
+  if (query.max !== undefined && query.max !== '') {
+    const max = Number(query.max);
+    if (Number.isFinite(max)) {
+      values.push(max);
+      where.push(`amount <= $${values.length}`);
+    }
+  }
+  if (query.search) {
+    values.push(`%${escapeLikePattern(query.search)}%`);
+    where.push(`(merchant_name ILIKE $${values.length} ESCAPE '\\' OR normalized_merchant_name ILIKE $${values.length} ESCAPE '\\')`);
+  }
+
+  return { where: where.join(' AND '), values };
+}
+
 async function readUserDataWithTransactions(userID) {
   const [dataResult, transactionsResult] = await Promise.all([
     pool.query('SELECT data FROM user_data WHERE user_id = $1', [userID]),
@@ -534,6 +586,20 @@ async function readUserDataWithTransactions(userID) {
   }
 
   return data ? { ...data, transactions } : null;
+}
+
+async function ensureUserTransactionsMigrated(userID) {
+  const countResult = await pool.query(
+    'SELECT COUNT(*)::INT AS total FROM budget_transactions WHERE user_id = $1',
+    [userID],
+  );
+  if ((countResult.rows[0]?.total ?? 0) > 0) return;
+
+  const dataResult = await pool.query('SELECT data FROM user_data WHERE user_id = $1', [userID]);
+  const data = dataResult.rows[0]?.data;
+  if (data && Array.isArray(data.transactions) && data.transactions.length > 0) {
+    await saveUserDataWithTransactions(userID, data);
+  }
 }
 
 async function saveUserDataWithTransactions(userID, data) {
@@ -584,6 +650,34 @@ app.put('/api/userdata', requireSessionAuth, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Could not save user data.' });
+  }
+});
+
+app.get('/api/transactions', requireSessionAuth, async (req, res) => {
+  try {
+    await ensureUserTransactionsMigrated(req.user.id);
+    const limit = parsePositiveInteger(req.query.limit, 75, 500);
+    const offset = Math.max(0, Number.parseInt(String(req.query.offset ?? '0'), 10) || 0);
+    const filters = buildTransactionFilters(req.user.id, req.query);
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::INT AS total FROM budget_transactions WHERE ${filters.where}`,
+      filters.values,
+    );
+    const values = [...filters.values, limit, offset];
+    const transactionsResult = await pool.query(
+      `SELECT row_data FROM budget_transactions
+       WHERE ${filters.where}
+       ORDER BY transaction_date DESC, created_at DESC
+       LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values,
+    );
+    res.json({
+      total: countResult.rows[0]?.total ?? 0,
+      transactions: transactionsResult.rows.map(row => row.row_data),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Could not load transactions.' });
   }
 });
 

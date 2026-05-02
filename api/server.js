@@ -35,8 +35,33 @@ async function initDB() {
       last_synced_at         TEXT,
       UNIQUE (user_id, item_id)
     );
+    CREATE TABLE IF NOT EXISTS budget_transactions (
+      user_id                  TEXT NOT NULL,
+      id                       TEXT NOT NULL,
+      external_id              TEXT,
+      merchant_name            TEXT NOT NULL DEFAULT '',
+      normalized_merchant_name TEXT NOT NULL DEFAULT '',
+      transaction_date         TEXT NOT NULL DEFAULT '',
+      amount                   NUMERIC NOT NULL DEFAULT 0,
+      currency                 TEXT NOT NULL DEFAULT 'USD',
+      category_id              TEXT NOT NULL DEFAULT '',
+      status                   TEXT NOT NULL DEFAULT '',
+      category_source          TEXT NOT NULL DEFAULT '',
+      confidence               NUMERIC NOT NULL DEFAULT 0,
+      raw_text                 TEXT NOT NULL DEFAULT '',
+      duplicate_risk           BOOLEAN NOT NULL DEFAULT FALSE,
+      transaction_type         TEXT NOT NULL DEFAULT 'expense',
+      created_at               TEXT NOT NULL DEFAULT '',
+      updated_at               TEXT NOT NULL DEFAULT '',
+      row_data                 JSONB NOT NULL,
+      PRIMARY KEY (user_id, id)
+    );
   `);
   await pool.query('ALTER TABLE plaid_tokens ADD COLUMN IF NOT EXISTS last_synced_at TEXT');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_budget_transactions_user_date ON budget_transactions (user_id, transaction_date DESC)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_budget_transactions_user_status ON budget_transactions (user_id, status)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_budget_transactions_user_category ON budget_transactions (user_id, category_id)');
+  await pool.query('CREATE INDEX IF NOT EXISTS idx_budget_transactions_user_external ON budget_transactions (user_id, external_id)');
   console.log('Database tables ready.');
 }
 
@@ -460,10 +485,92 @@ app.get('/health', (_req, res) => {
 
 // ─── User data (transactions, budgets, categories, rules) ────────────────────
 
+function splitTransactionsFromUserData(data) {
+  const incoming = data && typeof data === 'object' ? data : {};
+  const transactions = Array.isArray(incoming.transactions) ? incoming.transactions : [];
+  return {
+    settings: { ...incoming, transactions: [] },
+    transactions,
+  };
+}
+
+function transactionRowValues(userID, transaction) {
+  const row = transaction && typeof transaction === 'object' ? transaction : {};
+  const id = String(row.id || crypto.randomUUID());
+  const amount = Number(row.amount);
+  return [
+    userID,
+    id,
+    row.externalID ? String(row.externalID) : null,
+    String(row.merchantName || ''),
+    String(row.normalizedMerchantName || ''),
+    String(row.transactionDate || ''),
+    Number.isFinite(amount) ? amount : 0,
+    String(row.currency || 'USD'),
+    String(row.categoryID || ''),
+    String(row.status || ''),
+    String(row.categorySource || ''),
+    Number.isFinite(Number(row.confidence)) ? Number(row.confidence) : 0,
+    String(row.rawText || ''),
+    Boolean(row.duplicateRisk),
+    String(row.transactionType || 'expense'),
+    String(row.createdAt || ''),
+    String(row.updatedAt || ''),
+    { ...row, id },
+  ];
+}
+
+async function readUserDataWithTransactions(userID) {
+  const [dataResult, transactionsResult] = await Promise.all([
+    pool.query('SELECT data FROM user_data WHERE user_id = $1', [userID]),
+    pool.query('SELECT row_data FROM budget_transactions WHERE user_id = $1 ORDER BY transaction_date DESC, created_at DESC', [userID]),
+  ]);
+  const data = dataResult.rows[0]?.data ?? null;
+  const transactions = transactionsResult.rows.map(row => row.row_data);
+
+  if (data && transactions.length === 0 && Array.isArray(data.transactions) && data.transactions.length > 0) {
+    await saveUserDataWithTransactions(userID, data);
+    return data;
+  }
+
+  return data ? { ...data, transactions } : null;
+}
+
+async function saveUserDataWithTransactions(userID, data) {
+  const { settings, transactions } = splitTransactionsFromUserData(data);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
+      INSERT INTO user_data (user_id, data, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET data = $2, updated_at = NOW()
+    `, [userID, settings]);
+    await client.query('DELETE FROM budget_transactions WHERE user_id = $1', [userID]);
+    for (const transaction of transactions) {
+      await client.query(`
+        INSERT INTO budget_transactions (
+          user_id, id, external_id, merchant_name, normalized_merchant_name,
+          transaction_date, amount, currency, category_id, status, category_source,
+          confidence, raw_text, duplicate_risk, transaction_type, created_at,
+          updated_at, row_data
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+        )
+      `, transactionRowValues(userID, transaction));
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 app.get('/api/userdata', requireSessionAuth, async (req, res) => {
   try {
-    const result = await pool.query('SELECT data FROM user_data WHERE user_id = $1', [req.user.id]);
-    res.json(result.rows[0]?.data ?? null);
+    res.json(await readUserDataWithTransactions(req.user.id));
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Could not load user data.' });
@@ -472,11 +579,7 @@ app.get('/api/userdata', requireSessionAuth, async (req, res) => {
 
 app.put('/api/userdata', requireSessionAuth, async (req, res) => {
   try {
-    await pool.query(`
-      INSERT INTO user_data (user_id, data, updated_at)
-      VALUES ($1, $2, NOW())
-      ON CONFLICT (user_id) DO UPDATE SET data = $2, updated_at = NOW()
-    `, [req.user.id, req.body]);
+    await saveUserDataWithTransactions(req.user.id, req.body);
     res.json({ ok: true });
   } catch (error) {
     console.error(error);

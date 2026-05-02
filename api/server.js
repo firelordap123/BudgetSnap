@@ -631,6 +631,10 @@ function monthKey(date = new Date()) {
   return monthStartKey(date).slice(0, 7);
 }
 
+function isMonthKey(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}$/.test(value);
+}
+
 function monthEndKey(month) {
   const [year, monthNumber] = month.split('-').map(Number);
   const day = new Date(year, monthNumber, 0).getDate();
@@ -754,7 +758,7 @@ app.get('/api/transactions', requireSessionAuth, async (req, res) => {
 app.get('/api/dashboard-summary', requireSessionAuth, async (req, res) => {
   try {
     await ensureUserTransactionsMigrated(req.user.id);
-    const month = monthKey();
+    const month = isMonthKey(req.query.month) ? req.query.month : monthKey();
     const from = `${month}-01`;
     const to = monthEndKey(month);
     const [spendResult, categoryResult, recentResult, pendingResult] = await Promise.all([

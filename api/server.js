@@ -320,6 +320,24 @@ function buildTransactionDTO(t, categoryID, confidence) {
   };
 }
 
+function isVenmoOutflowTransaction(t) {
+  if (!(t.amount > 0)) return false;
+  const parts = [
+    t.merchant_name,
+    t.name,
+    t.original_description,
+    t.payment_channel,
+    t.personal_finance_category?.detailed,
+  ];
+  return parts.some(part => String(part || '').toUpperCase().includes('VENMO'));
+}
+
+function isDateKey(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
+}
+
 async function classifyWithOpenAI(transactions) {
   if (!process.env.OPENAI_API_KEY) {
     return {
@@ -396,7 +414,12 @@ async function categorizePlaidTransactions(plaidTxns) {
     }
 
     const mapped = PLAID_STATIC_MAP[primary];
-    if (mapped === null) continue; // skip income/transfers
+    if (mapped === null) {
+      if (isVenmoOutflowTransaction(t)) {
+        results.push(buildTransactionDTO(t, 'cat_misc', 0.75));
+      }
+      continue; // skip other income/transfers
+    }
     results.push(buildTransactionDTO(t, mapped ?? 'cat_misc', 1.0));
   }
 
@@ -593,12 +616,19 @@ app.post('/api/plaid/sync', requireSessionAuth, async (req, res) => {
       return res.status(404).json({ error: 'No linked accounts found.' });
     }
 
-    // Default to last 30 days
+    // Default to last 30 days unless a complete date range is provided.
     const now = new Date();
     const thirtyDaysAgo = new Date(now);
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const startDate = req.body.startDate || thirtyDaysAgo.toISOString().slice(0, 10);
-    const endDate = req.body.endDate || now.toISOString().slice(0, 10);
+    const hasDateRange = Boolean(req.body.startDate || req.body.endDate);
+    if (hasDateRange && (!isDateKey(req.body.startDate) || !isDateKey(req.body.endDate))) {
+      return res.status(400).json({ error: 'A valid startDate and endDate are required for custom date ranges.' });
+    }
+    if (hasDateRange && req.body.startDate > req.body.endDate) {
+      return res.status(400).json({ error: 'startDate must be before or equal to endDate.' });
+    }
+    const startDate = hasDateRange ? req.body.startDate : thirtyDaysAgo.toISOString().slice(0, 10);
+    const endDate = hasDateRange ? req.body.endDate : now.toISOString().slice(0, 10);
 
     let allRaw = [];
     const syncedAt = new Date().toISOString();

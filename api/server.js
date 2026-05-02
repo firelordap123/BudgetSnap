@@ -13,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOKENS_PATH = path.join(__dirname, 'plaid_tokens.json');
 
 const { Pool } = pg;
+console.log('DATABASE_URL set:', !!process.env.DATABASE_URL, '| value starts with:', process.env.DATABASE_URL?.slice(0, 30));
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 async function initDB() {

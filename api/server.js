@@ -13,8 +13,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOKENS_PATH = path.join(__dirname, 'plaid_tokens.json');
 
 const { Pool } = pg;
-console.log('DATABASE_URL set:', !!process.env.DATABASE_URL, '| value starts with:', process.env.DATABASE_URL?.slice(0, 30));
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const dbUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+console.log('DB URL set:', !!dbUrl, '| starts with:', dbUrl?.slice(0, 30));
+const pool = new Pool({ connectionString: dbUrl });
 
 async function initDB() {
   await pool.query(`

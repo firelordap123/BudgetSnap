@@ -14,7 +14,6 @@ const TOKENS_PATH = path.join(__dirname, 'plaid_tokens.json');
 
 const { Pool } = pg;
 const dbUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;
-console.log('DB URL set:', !!dbUrl, '| starts with:', dbUrl?.slice(0, 30));
 const pool = new Pool({ connectionString: dbUrl });
 
 async function initDB() {

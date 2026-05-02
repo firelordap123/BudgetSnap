@@ -8,6 +8,7 @@ import express from 'express';
 import pg from 'pg';
 import OpenAI from 'openai';
 import { Configuration, PlaidApi, PlaidEnvironments, Products, CountryCode } from 'plaid';
+import { PLAID_STATIC_MAP, NEEDS_AI, allowedCategoryIDs } from './plaidCategoryMap.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOKENS_PATH = path.join(__dirname, 'plaid_tokens.json');
@@ -31,9 +32,11 @@ async function initDB() {
       access_token_encrypted TEXT NOT NULL,
       item_id                TEXT NOT NULL,
       linked_at              TEXT NOT NULL,
+      last_synced_at         TEXT,
       UNIQUE (user_id, item_id)
     );
   `);
+  await pool.query('ALTER TABLE plaid_tokens ADD COLUMN IF NOT EXISTS last_synced_at TEXT');
   console.log('Database tables ready.');
 }
 
@@ -70,46 +73,6 @@ const plaidClient = new PlaidApi(new Configuration({
     }
   }
 }));
-
-const allowedCategoryIDs = [
-  'cat_housing',
-  'cat_groceries',
-  'cat_dining',
-  'cat_coffee',
-  'cat_transit',
-  'cat_utilities',
-  'cat_shopping',
-  'cat_subscriptions',
-  'cat_entertainment',
-  'cat_health',
-  'cat_travel',
-  'cat_misc'
-];
-
-// Static map: Plaid personal_finance_category.primary → custom category ID
-// null = skip this transaction (income, transfers)
-const PLAID_STATIC_MAP = {
-  FOOD_AND_DRINK:             'cat_dining',
-  GROCERY:                    'cat_groceries',
-  RENT_AND_UTILITIES:         'cat_utilities',
-  HOME_IMPROVEMENT:           'cat_housing',
-  LOAN_PAYMENTS:              'cat_housing',
-  ENTERTAINMENT:              'cat_entertainment',
-  RECREATION:                 'cat_entertainment',
-  PERSONAL_CARE:              'cat_health',
-  MEDICAL:                    'cat_health',
-  TRANSPORTATION:             'cat_transit',
-  TRAVEL:                     'cat_travel',
-  GOVERNMENT_AND_NON_PROFIT:  'cat_misc',
-  BANK_FEES:                  'cat_misc',
-  OTHER:                      'cat_misc',
-  INCOME:                     null,
-  TRANSFER_IN:                null,
-  TRANSFER_OUT:               null,
-};
-
-// These primaries need OpenAI to inspect the detailed sub-category
-const NEEDS_AI = new Set(['GENERAL_MERCHANDISE', 'GENERAL_SERVICES', 'SUBSCRIPTION']);
 
 const MAX_TEXTS_PER_REQUEST = 10;
 const APPLE_ISSUER = 'https://appleid.apple.com';
@@ -252,6 +215,7 @@ async function readTokens() {
     accessToken: decryptAccessToken(row.access_token_encrypted),
     itemId: row.item_id,
     linkedAt: row.linked_at,
+    lastSyncedAt: row.last_synced_at,
   }));
 }
 
@@ -260,13 +224,28 @@ async function upsertToken(entry) {
     throw new Error('TOKEN_ENCRYPTION_KEY is required before writing Plaid access tokens.');
   }
   await pool.query(`
-    INSERT INTO plaid_tokens (id, user_id, institution_name, institution_id, access_token_encrypted, item_id, linked_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    INSERT INTO plaid_tokens (id, user_id, institution_name, institution_id, access_token_encrypted, item_id, linked_at, last_synced_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     ON CONFLICT (user_id, item_id) DO UPDATE SET
       id = $1, institution_name = $3, institution_id = $4,
       access_token_encrypted = $5, linked_at = $7
   `, [entry.id, entry.userID, entry.institutionName, entry.institutionId || '',
-      encryptAccessToken(entry.accessToken), entry.itemId, entry.linkedAt]);
+      encryptAccessToken(entry.accessToken), entry.itemId, entry.linkedAt, entry.lastSyncedAt || null]);
+}
+
+async function updateTokenLastSynced(userID, itemID, syncedAt) {
+  await pool.query(
+    'UPDATE plaid_tokens SET last_synced_at = $1 WHERE user_id = $2 AND item_id = $3',
+    [syncedAt, userID, itemID]
+  );
+}
+
+async function deleteToken(userID, itemID) {
+  const result = await pool.query(
+    'DELETE FROM plaid_tokens WHERE user_id = $1 AND item_id = $2',
+    [userID, itemID]
+  );
+  return result.rowCount > 0;
 }
 
 function encryptionKey() {
@@ -342,23 +321,41 @@ function buildTransactionDTO(t, categoryID, confidence) {
 }
 
 async function classifyWithOpenAI(transactions) {
+  if (!process.env.OPENAI_API_KEY) {
+    return {
+      transactions: transactions.map(t => buildTransactionDTO(t, 'cat_misc', 0.25)),
+      warnings: [{ type: 'openai_unavailable', message: 'OpenAI API key is missing; ambiguous transactions were categorized as Miscellaneous.' }],
+    };
+  }
+
   const items = transactions
     .map((t, i) => `${i + 1}. merchant="${t.merchant_name || t.name}" plaid_category="${t.personal_finance_category?.detailed ?? ''}"`)
     .join('\n');
 
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    response_format: { type: 'json_object' },
-    messages: [
-      { role: 'system', content: plaidCategorizationPrompt() },
-      { role: 'user', content: `Classify these transactions:\n${items}` }
-    ]
-  });
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: plaidCategorizationPrompt() },
+        { role: 'user', content: `Classify these transactions:\n${items}` }
+      ]
+    });
 
-  const parsed = JSON.parse(response.choices[0].message.content);
-  return (parsed.results || []).map((r, i) =>
-    buildTransactionDTO(transactions[i], r.category_id, 0.85)
-  );
+    const parsed = JSON.parse(response.choices[0].message.content);
+    return {
+      transactions: (parsed.results || []).map((r, i) =>
+        buildTransactionDTO(transactions[i], r.category_id, 0.85)
+      ),
+      warnings: [],
+    };
+  } catch (error) {
+    console.warn('OpenAI categorization failed; falling back to Miscellaneous.', error?.message);
+    return {
+      transactions: transactions.map(t => buildTransactionDTO(t, 'cat_misc', 0.25)),
+      warnings: [{ type: 'openai_failed', message: 'OpenAI categorization failed; ambiguous transactions were categorized as Miscellaneous.' }],
+    };
+  }
 }
 
 function plaidCategorizationPrompt() {
@@ -381,6 +378,7 @@ Rules:
 async function categorizePlaidTransactions(plaidTxns) {
   const results = [];
   const aiQueue = [];
+  const warnings = [];
 
   for (const t of plaidTxns) {
     const primary = t.personal_finance_category?.primary ?? 'OTHER';
@@ -407,15 +405,28 @@ async function categorizePlaidTransactions(plaidTxns) {
   for (let i = 0; i < aiQueue.length; i += BATCH_SIZE) {
     const batch = aiQueue.slice(i, i + BATCH_SIZE);
     const aiResults = await classifyWithOpenAI(batch);
-    results.push(...aiResults);
+    results.push(...aiResults.transactions);
+    warnings.push(...aiResults.warnings);
   }
 
-  return results;
+  return { transactions: results, warnings };
 }
 
 // ─── Middleware ──────────────────────────────────────────────────────────────
 
-app.use(cors());
+const allowedOrigins = (process.env.CORS_ORIGINS || process.env.FRONTEND_ORIGIN || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error('Origin not allowed by CORS.'));
+  },
+}));
 app.use(express.json({ limit: '25mb' }));
 
 // ─── Health ──────────────────────────────────────────────────────────────────
@@ -538,13 +549,34 @@ app.get('/api/plaid/accounts', requireSessionAuth, async (req, res) => {
     const tokens = await readTokens();
     const accounts = tokens
       .filter(token => token.userID === req.user.id)
-      .map(({ id, institutionName, institutionId, itemId, linkedAt }) => ({
-        id, institutionName, institutionId, itemId, linkedAt,
+      .map(({ id, institutionName, institutionId, itemId, linkedAt, lastSyncedAt }) => ({
+        id, institutionName, institutionId, itemId, linkedAt, lastSyncedAt,
       }));
     res.json({ accounts });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Could not load linked accounts.' });
+  }
+});
+
+// ─── Plaid: disconnect account ───────────────────────────────────────────────
+
+app.delete('/api/plaid/accounts/:itemId', requireSessionAuth, async (req, res) => {
+  try {
+    const tokens = await readTokens();
+    const token = tokens.find(t => t.userID === req.user.id && t.itemId === req.params.itemId);
+    if (!token) return res.status(404).json({ error: 'Linked account not found.' });
+    try {
+      await plaidClient.itemRemove({ access_token: token.accessToken });
+    } catch (error) {
+      console.warn('Plaid item removal failed; deleting local token anyway.', error?.message);
+    }
+    const deleted = await deleteToken(req.user.id, req.params.itemId);
+    if (!deleted) return res.status(404).json({ error: 'Linked account not found.' });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Could not disconnect linked account.' });
   }
 });
 
@@ -569,6 +601,7 @@ app.post('/api/plaid/sync', requireSessionAuth, async (req, res) => {
     const endDate = req.body.endDate || now.toISOString().slice(0, 10);
 
     let allRaw = [];
+    const syncedAt = new Date().toISOString();
     for (const token of targets) {
       let offset = 0;
       let total = 0;
@@ -583,17 +616,18 @@ app.post('/api/plaid/sync', requireSessionAuth, async (req, res) => {
         total = txnResponse.data.total_transactions;
         offset += txnResponse.data.transactions.length;
       } while (offset < total);
+      await updateTokenLastSynced(req.user.id, token.itemId, syncedAt);
     }
 
     // Exclude pending and credits (Plaid: positive amount = debit/expense)
     const expenses = allRaw.filter(t => !t.pending && t.amount > 0);
-    const transactions = await categorizePlaidTransactions(expenses);
+    const categorized = await categorizePlaidTransactions(expenses);
 
     res.json({
       importBatchID: crypto.randomUUID(),
       status: 'processed',
-      transactions,
-      warnings: [],
+      transactions: categorized.transactions,
+      warnings: categorized.warnings,
     });
   } catch (error) {
     console.error(error);
@@ -656,7 +690,7 @@ Schema:
       "transaction_date": "YYYY-MM-DD or null",
       "amount": 0,
       "currency": "USD",
-      "transaction_type": "expense | credit | refund | unknown",
+      "transaction_type": "expense | payment_out | payment_in | credit | refund | unknown",
       "suggested_category_id": "string",
       "confidence": 0,
       "raw_text": "string",
@@ -680,7 +714,7 @@ Rules:
 - Preserve dates as accurately as possible.
 - Use null when a date is not visible.
 - Treat expenses as positive spending values.
-- Identify credits and refunds separately when visible.
+- Identify payments, credits, and refunds separately when visible.
 - Use USD unless another currency is visible.
 - Use cat_misc if no category is clear.
 - Confidence must be between 0 and 1.
@@ -706,7 +740,7 @@ function normalizeScreenshotTransactions(transactions) {
 }
 
 function normalizeTransactionType(type) {
-  const allowed = new Set(['expense', 'credit', 'refund', 'unknown']);
+  const allowed = new Set(['expense', 'payment_out', 'payment_in', 'credit', 'refund', 'unknown']);
   return allowed.has(type) ? type : 'unknown';
 }
 

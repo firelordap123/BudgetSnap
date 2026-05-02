@@ -534,7 +534,13 @@ function buildTransactionFilters(userID, query) {
   const where = ['user_id = $1'];
   const values = [userID];
 
-  if (query.status && query.status !== 'all') {
+  if (query.statuses) {
+    const statuses = String(query.statuses).split(',').map(v => v.trim()).filter(Boolean);
+    if (statuses.length > 0) {
+      values.push(statuses);
+      where.push(`status = ANY($${values.length})`);
+    }
+  } else if (query.status && query.status !== 'all') {
     values.push(String(query.status));
     where.push(`status = $${values.length}`);
   }
@@ -570,6 +576,70 @@ function buildTransactionFilters(userID, query) {
   }
 
   return { where: where.join(' AND '), values };
+}
+
+function activeExpenseClause() {
+  return "status = 'accepted' AND transaction_type = 'expense'";
+}
+
+function transactionSummaryFilters(userID, query, { includeDate = true } = {}) {
+  const where = ['user_id = $1', activeExpenseClause()];
+  const values = [userID];
+
+  if (includeDate && query.from && isDateKey(String(query.from))) {
+    values.push(String(query.from));
+    where.push(`transaction_date >= $${values.length}`);
+  }
+  if (includeDate && query.to && isDateKey(String(query.to))) {
+    values.push(String(query.to));
+    where.push(`transaction_date <= $${values.length}`);
+  }
+  if (query.categoryIDs) {
+    const categories = String(query.categoryIDs).split(',').map(v => v.trim()).filter(Boolean);
+    if (categories.length > 0) {
+      values.push(categories);
+      where.push(`category_id = ANY($${values.length})`);
+    }
+  }
+  if (query.merchant) {
+    values.push(`%${escapeLikePattern(query.merchant)}%`);
+    where.push(`(merchant_name ILIKE $${values.length} ESCAPE '\\' OR normalized_merchant_name ILIKE $${values.length} ESCAPE '\\')`);
+  }
+  if (query.min !== undefined && query.min !== '') {
+    const min = Number(query.min);
+    if (Number.isFinite(min)) {
+      values.push(min);
+      where.push(`amount >= $${values.length}`);
+    }
+  }
+  if (query.max !== undefined && query.max !== '') {
+    const max = Number(query.max);
+    if (Number.isFinite(max)) {
+      values.push(max);
+      where.push(`amount <= $${values.length}`);
+    }
+  }
+
+  return { where: where.join(' AND '), values };
+}
+
+function monthStartKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+function monthKey(date = new Date()) {
+  return monthStartKey(date).slice(0, 7);
+}
+
+function monthEndKey(month) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  const day = new Date(year, monthNumber, 0).getDate();
+  return `${month}-${String(day).padStart(2, '0')}`;
+}
+
+function todayKey() {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 async function readUserDataWithTransactions(userID) {
@@ -678,6 +748,153 @@ app.get('/api/transactions', requireSessionAuth, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Could not load transactions.' });
+  }
+});
+
+app.get('/api/dashboard-summary', requireSessionAuth, async (req, res) => {
+  try {
+    await ensureUserTransactionsMigrated(req.user.id);
+    const month = monthKey();
+    const from = `${month}-01`;
+    const to = monthEndKey(month);
+    const [spendResult, categoryResult, recentResult, pendingResult] = await Promise.all([
+      pool.query(
+        `SELECT COALESCE(SUM(amount), 0)::FLOAT AS total_spent
+         FROM budget_transactions
+         WHERE user_id = $1 AND ${activeExpenseClause()} AND transaction_date >= $2 AND transaction_date <= $3`,
+        [req.user.id, from, to],
+      ),
+      pool.query(
+        `SELECT category_id, COALESCE(SUM(amount), 0)::FLOAT AS total, COUNT(*)::INT AS count
+         FROM budget_transactions
+         WHERE user_id = $1 AND ${activeExpenseClause()} AND transaction_date >= $2 AND transaction_date <= $3
+         GROUP BY category_id
+         ORDER BY total DESC`,
+        [req.user.id, from, to],
+      ),
+      pool.query(
+        `SELECT row_data FROM budget_transactions
+         WHERE user_id = $1 AND ${activeExpenseClause()} AND transaction_date >= $2 AND transaction_date <= $3
+         ORDER BY transaction_date DESC, created_at DESC
+         LIMIT 5`,
+        [req.user.id, from, to],
+      ),
+      pool.query(
+        "SELECT COUNT(*)::INT AS count FROM budget_transactions WHERE user_id = $1 AND status IN ('pending_review', 'duplicate')",
+        [req.user.id],
+      ),
+    ]);
+
+    res.json({
+      month: from,
+      totalSpent: spendResult.rows[0]?.total_spent ?? 0,
+      categoryTotals: categoryResult.rows.map(row => ({
+        categoryID: row.category_id,
+        total: row.total,
+        count: row.count,
+      })),
+      recentTransactions: recentResult.rows.map(row => row.row_data),
+      pendingReviewCount: pendingResult.rows[0]?.count ?? 0,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Could not load dashboard summary.' });
+  }
+});
+
+app.get('/api/reports/summary', requireSessionAuth, async (req, res) => {
+  try {
+    await ensureUserTransactionsMigrated(req.user.id);
+    const filtered = transactionSummaryFilters(req.user.id, req.query);
+    const nonDate = transactionSummaryFilters(req.user.id, req.query, { includeDate: false });
+    const currentMonth = monthKey();
+    const currentStart = `${currentMonth}-01`;
+    const currentEnd = todayKey();
+    const currentMonthEnd = monthEndKey(currentMonth);
+    const comparisonMonth = String(req.query.comparisonMonth || currentMonth);
+    const compareStart = `${comparisonMonth}-01`;
+    const currentDay = Number(currentEnd.slice(-2));
+    const compareEndDay = Math.min(currentDay, Number(monthEndKey(comparisonMonth).slice(-2)));
+    const compareEnd = `${comparisonMonth}-${String(compareEndDay).padStart(2, '0')}`;
+
+    const filteredTotals = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0)::FLOAT AS total, COUNT(*)::INT AS count
+       FROM budget_transactions WHERE ${filtered.where}`,
+      filtered.values,
+    );
+    const categoryTotals = await pool.query(
+      `SELECT category_id, COALESCE(SUM(amount), 0)::FLOAT AS total, COUNT(*)::INT AS count
+       FROM budget_transactions WHERE ${filtered.where}
+       GROUP BY category_id ORDER BY total DESC`,
+      filtered.values,
+    );
+    const topMerchants = await pool.query(
+      `SELECT normalized_merchant_name, MIN(merchant_name) AS name, COALESCE(SUM(amount), 0)::FLOAT AS total, COUNT(*)::INT AS count
+       FROM budget_transactions WHERE ${filtered.where}
+       GROUP BY normalized_merchant_name ORDER BY total DESC LIMIT 5`,
+      filtered.values,
+    );
+
+    async function totalForRange(start, end) {
+      const values = [...nonDate.values, start, end];
+      const result = await pool.query(
+        `SELECT COALESCE(SUM(amount), 0)::FLOAT AS total, COUNT(*)::INT AS count
+         FROM budget_transactions
+         WHERE ${nonDate.where} AND transaction_date >= $${values.length - 1} AND transaction_date <= $${values.length}`,
+        values,
+      );
+      return result.rows[0] ?? { total: 0, count: 0 };
+    }
+
+    async function categoriesForRange(start, end) {
+      const values = [...nonDate.values, start, end];
+      const result = await pool.query(
+        `SELECT category_id, COALESCE(SUM(amount), 0)::FLOAT AS total, COUNT(*)::INT AS count
+         FROM budget_transactions
+         WHERE ${nonDate.where} AND transaction_date >= $${values.length - 1} AND transaction_date <= $${values.length}
+         GROUP BY category_id ORDER BY total DESC`,
+        values,
+      );
+      return result.rows.map(row => ({ categoryID: row.category_id, total: row.total, count: row.count }));
+    }
+
+    const [current, currentMonthTotal, compare, currentCategories, compareCategories] = await Promise.all([
+      totalForRange(currentStart, currentEnd),
+      totalForRange(currentStart, currentMonthEnd),
+      totalForRange(compareStart, compareEnd),
+      categoriesForRange(currentStart, currentEnd),
+      categoriesForRange(compareStart, compareEnd),
+    ]);
+
+    const delta = (current.total ?? 0) - (compare.total ?? 0);
+    const pct = (compare.total ?? 0) > 0 ? (delta / compare.total) * 100 : 0;
+    res.json({
+      filteredTotal: filteredTotals.rows[0]?.total ?? 0,
+      filteredCount: filteredTotals.rows[0]?.count ?? 0,
+      categoryTotals: categoryTotals.rows.map(row => ({ categoryID: row.category_id, total: row.total, count: row.count })),
+      topMerchants: topMerchants.rows.map(row => ({ name: row.name, total: row.total, count: row.count })),
+      comparison: {
+        currentKey: currentMonth,
+        comparisonMonth,
+        currentTotal: current.total ?? 0,
+        currentMonthTotal: currentMonthTotal.total ?? 0,
+        compareTotal: compare.total ?? 0,
+        delta,
+        pct,
+        currentStart,
+        currentEnd,
+        currentMonthEnd,
+        compareStart,
+        compareEnd,
+        currentDay,
+        compareEndDay,
+        currentCategories,
+        compareCategories,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Could not load report summary.' });
   }
 });
 

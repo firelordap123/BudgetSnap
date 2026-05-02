@@ -5,11 +5,36 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cors from 'cors';
 import express from 'express';
+import pg from 'pg';
 import OpenAI from 'openai';
 import { Configuration, PlaidApi, PlaidEnvironments, Products, CountryCode } from 'plaid';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOKENS_PATH = path.join(__dirname, 'plaid_tokens.json');
+
+const { Pool } = pg;
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_data (
+      user_id TEXT PRIMARY KEY,
+      data    JSONB NOT NULL DEFAULT '{}',
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS plaid_tokens (
+      id                     TEXT PRIMARY KEY,
+      user_id                TEXT NOT NULL,
+      institution_name       TEXT NOT NULL,
+      institution_id         TEXT NOT NULL DEFAULT '',
+      access_token_encrypted TEXT NOT NULL,
+      item_id                TEXT NOT NULL,
+      linked_at              TEXT NOT NULL,
+      UNIQUE (user_id, item_id)
+    );
+  `);
+  console.log('Database tables ready.');
+}
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -214,23 +239,33 @@ async function verifyAppleIdentityToken(identityToken) {
   return { id: `apple:${jwt.payload.sub}` };
 }
 
-// ─── Token file helpers ──────────────────────────────────────────────────────
+// ─── Token DB helpers ────────────────────────────────────────────────────────
 
 async function readTokens() {
-  try {
-    const raw = await fs.readFile(TOKENS_PATH, 'utf8');
-    return JSON.parse(raw).map(decryptTokenEntry);
-  } catch (error) {
-    if (error.code === 'ENOENT') return [];
-    throw error;
-  }
+  const result = await pool.query('SELECT * FROM plaid_tokens ORDER BY linked_at');
+  return result.rows.map(row => ({
+    id: row.id,
+    userID: row.user_id,
+    institutionName: row.institution_name,
+    institutionId: row.institution_id,
+    accessToken: decryptAccessToken(row.access_token_encrypted),
+    itemId: row.item_id,
+    linkedAt: row.linked_at,
+  }));
 }
 
-async function writeTokens(tokens) {
+async function upsertToken(entry) {
   if (!process.env.TOKEN_ENCRYPTION_KEY) {
     throw new Error('TOKEN_ENCRYPTION_KEY is required before writing Plaid access tokens.');
   }
-  await fs.writeFile(TOKENS_PATH, JSON.stringify(tokens.map(encryptTokenEntry), null, 2));
+  await pool.query(`
+    INSERT INTO plaid_tokens (id, user_id, institution_name, institution_id, access_token_encrypted, item_id, linked_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    ON CONFLICT (user_id, item_id) DO UPDATE SET
+      id = $1, institution_name = $3, institution_id = $4,
+      access_token_encrypted = $5, linked_at = $7
+  `, [entry.id, entry.userID, entry.institutionName, entry.institutionId || '',
+      encryptAccessToken(entry.accessToken), entry.itemId, entry.linkedAt]);
 }
 
 function encryptionKey() {
@@ -388,6 +423,32 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'BudgetSnap API' });
 });
 
+// ─── User data (transactions, budgets, categories, rules) ────────────────────
+
+app.get('/api/userdata', requireSessionAuth, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT data FROM user_data WHERE user_id = $1', [req.user.id]);
+    res.json(result.rows[0]?.data ?? null);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Could not load user data.' });
+  }
+});
+
+app.put('/api/userdata', requireSessionAuth, async (req, res) => {
+  try {
+    await pool.query(`
+      INSERT INTO user_data (user_id, data, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET data = $2, updated_at = NOW()
+    `, [req.user.id, req.body]);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Could not save user data.' });
+  }
+});
+
 // ─── Auth: Password (web) ────────────────────────────────────────────────────
 
 app.post('/api/auth/password', (req, res) => {
@@ -451,8 +512,6 @@ app.post('/api/plaid/exchange-token', requireSessionAuth, async (req, res) => {
     const exchangeResponse = await plaidClient.itemPublicTokenExchange({ public_token: publicToken });
     const { access_token, item_id } = exchangeResponse.data;
 
-    const tokens = await readTokens();
-    const existingIndex = tokens.findIndex(t => t.userID === req.user.id && t.itemId === item_id);
     const entry = {
       id: crypto.randomUUID(),
       userID: req.user.id,
@@ -463,13 +522,7 @@ app.post('/api/plaid/exchange-token', requireSessionAuth, async (req, res) => {
       linkedAt: new Date().toISOString(),
     };
 
-    if (existingIndex >= 0) {
-      tokens[existingIndex] = entry;
-    } else {
-      tokens.push(entry);
-    }
-
-    await writeTokens(tokens);
+    await upsertToken(entry);
     res.json({ ok: true, institutionName: entry.institutionName, itemId: item_id });
   } catch (error) {
     console.error(error);
@@ -661,6 +714,6 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-app.listen(port, () => {
-  console.log(`BudgetSnap API running at http://localhost:${port}`);
-});
+initDB()
+  .then(() => app.listen(port, () => console.log(`BudgetSnap API running at http://localhost:${port}`)))
+  .catch(err => { console.error('Failed to initialize database:', err); process.exit(1); });

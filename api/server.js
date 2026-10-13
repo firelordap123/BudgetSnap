@@ -230,14 +230,14 @@ async function verifyAppleIdentityToken(identityToken) {
 
 // ─── Token DB helpers ────────────────────────────────────────────────────────
 
-async function readTokens() {
-  const result = await pool.query('SELECT * FROM plaid_tokens ORDER BY linked_at');
+async function readTokens(userID, includeAccessToken = true) {
+  const result = await pool.query('SELECT * FROM plaid_tokens WHERE user_id = $1 ORDER BY linked_at', [userID]);
   return result.rows.map(row => ({
     id: row.id,
     userID: row.user_id,
     institutionName: row.institution_name,
     institutionId: row.institution_id,
-    accessToken: decryptAccessToken(row.access_token_encrypted),
+    ...(includeAccessToken ? { accessToken: decryptAccessToken(row.access_token_encrypted) } : {}),
     itemId: row.item_id,
     linkedAt: row.linked_at,
     lastSyncedAt: row.last_synced_at,
@@ -961,6 +961,9 @@ app.post('/api/plaid/exchange-token', requireSessionAuth, async (req, res) => {
   try {
     const { publicToken, institutionName, institutionId } = req.body;
     if (!publicToken) return res.status(400).json({ error: 'publicToken is required.' });
+    if (!process.env.TOKEN_ENCRYPTION_KEY) {
+      return res.status(503).json({ error: 'Bank connections cannot be saved until TOKEN_ENCRYPTION_KEY is configured on the server.' });
+    }
 
     const exchangeResponse = await plaidClient.itemPublicTokenExchange({ public_token: publicToken });
     const { access_token, item_id } = exchangeResponse.data;
@@ -987,7 +990,7 @@ app.post('/api/plaid/exchange-token', requireSessionAuth, async (req, res) => {
 
 app.get('/api/plaid/accounts', requireSessionAuth, async (req, res) => {
   try {
-    const tokens = await readTokens();
+    const tokens = await readTokens(req.user.id, false);
     const accounts = tokens
       .filter(token => token.userID === req.user.id)
       .map(({ id, institutionName, institutionId, itemId, linkedAt, lastSyncedAt }) => ({
@@ -1004,7 +1007,7 @@ app.get('/api/plaid/accounts', requireSessionAuth, async (req, res) => {
 
 app.delete('/api/plaid/accounts/:itemId', requireSessionAuth, async (req, res) => {
   try {
-    const tokens = await readTokens();
+    const tokens = await readTokens(req.user.id);
     const token = tokens.find(t => t.userID === req.user.id && t.itemId === req.params.itemId);
     if (!token) return res.status(404).json({ error: 'Linked account not found.' });
     try {
@@ -1026,7 +1029,7 @@ app.delete('/api/plaid/accounts/:itemId', requireSessionAuth, async (req, res) =
 app.post('/api/plaid/sync', requireSessionAuth, async (req, res) => {
   try {
     const { itemId } = req.body;
-    const tokens = await readTokens();
+    const tokens = await readTokens(req.user.id);
     const userTokens = tokens.filter(t => t.userID === req.user.id);
     const targets = itemId ? userTokens.filter(t => t.itemId === itemId) : userTokens;
 

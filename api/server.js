@@ -9,6 +9,7 @@ import pg from 'pg';
 import OpenAI from 'openai';
 import { Configuration, PlaidApi, PlaidEnvironments, Products, CountryCode } from 'plaid';
 import { PLAID_STATIC_MAP, NEEDS_AI, allowedCategoryIDs } from './plaidCategoryMap.js';
+import { saveChanges, validateChanges } from './saveChanges.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOKENS_PATH = path.join(__dirname, 'plaid_tokens.json');
@@ -724,6 +725,19 @@ app.put('/api/userdata', requireSessionAuth, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Could not save user data.' });
+  }
+});
+
+app.patch('/api/userdata', requireSessionAuth, async (req, res) => {
+  if (!validateChanges(req.body)) {
+    return res.status(400).json({ error: 'A valid settings, transactions, and deletedIDs change set is required.' });
+  }
+  try {
+    await saveChanges(pool, req.user.id, req.body, transactionRowValues);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Could not save changes. Please try again.' });
   }
 });
 
